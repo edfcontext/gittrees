@@ -118,6 +118,7 @@ struct RepositoryWindow: View {
                 WindowConfigurator(title: windowTitle) {
                     session.keyService = service
                     session.keyCommands = commands
+                    service.refreshOnWindowActivation()
                 }
             )
             .focusedSceneValue(\.repositoryService, service)

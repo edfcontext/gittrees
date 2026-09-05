@@ -63,7 +63,9 @@ behave exactly as they do on the command line.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
-  unified diff (working tree or index), and a commit editor.
+  unified diff (working tree or index), and a commit editor. Status reloads when the
+  window becomes key (returning from an IDE) as well as after GitTrees operations and
+  ⌘R.
 - **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
   `--set-upstream` offered for a branch that has never been pushed. Git's stdout and
   stderr are shown verbatim.

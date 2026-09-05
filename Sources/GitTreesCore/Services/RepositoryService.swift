@@ -324,6 +324,13 @@ public final class RepositoryService {
         }
     }
 
+    /// Called when this window becomes key, so Changes (and the rest of the
+    /// worktree) pick up edits made in an IDE or another GitTrees window.
+    public func refreshOnWindowActivation() {
+        guard repository != nil else { return }
+        refresh()
+    }
+
     private func reload() async {
         rebuildClientIfNeeded()
         guard let repository else { return }

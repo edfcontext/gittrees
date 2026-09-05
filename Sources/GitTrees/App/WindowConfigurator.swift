@@ -34,6 +34,12 @@ final class BecomeKeyView: NSView {
             name: NSWindow.didBecomeKeyNotification,
             object: window
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appBecameActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
         if window.isKeyWindow {
             DispatchQueue.main.async { [onBecomeKey] in
                 onBecomeKey()
@@ -46,6 +52,13 @@ final class BecomeKeyView: NSView {
     }
 
     @objc private func becameKey() {
+        DispatchQueue.main.async { [onBecomeKey] in
+            onBecomeKey()
+        }
+    }
+
+    @objc private func appBecameActive() {
+        guard window?.isKeyWindow == true else { return }
         DispatchQueue.main.async { [onBecomeKey] in
             onBecomeKey()
         }
