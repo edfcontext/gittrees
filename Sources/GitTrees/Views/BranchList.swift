@@ -47,12 +47,13 @@ struct BranchList: View {
                 selection = .branch(branch.refName)
                 onCreateWorktree()
             }
-            // This branch has no worktree, so a checkout here is the one Git allows.
-            Button("Checkout in Current Worktree") {
-                guard let current = service.selectedWorktree else { return }
-                Task { await service.checkout(branch: branch, in: current) }
+            // This branch has no worktree, so a checkout in the main worktree is
+            // the one Git allows.
+            Button("Checkout in Main Worktree") {
+                guard let main = service.mainWorktree else { return }
+                Task { await service.checkout(branch: branch, in: main) }
             }
-            .disabled(service.selectedWorktree == nil)
+            .disabled(service.mainWorktree == nil)
         }
     }
 

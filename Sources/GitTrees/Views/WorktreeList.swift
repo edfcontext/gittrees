@@ -118,6 +118,14 @@ struct WorktreeContextMenu: View {
         Button("Open Terminal Here") { open(in: .terminal) }
         Button("Reveal in Finder") { launcher.reveal(worktree.path) }
 
+        if worktree.isMain, !worktree.isBare, !worktree.isMissingOnDisk {
+            Divider()
+            Menu("Switch Branch") {
+                SwitchBranchMenuContent(worktree: worktree)
+            }
+            .disabled(service.isBusy(worktree))
+        }
+
         Divider()
 
         Button("Fetch") { run { await service.fetch() } }
@@ -151,6 +159,32 @@ struct WorktreeContextMenu: View {
             } catch {
                 service.lastError = PresentableError(title: "Could Not Open Worktree", error: error)
             }
+        }
+    }
+}
+
+/// Local branches offered as `git checkout` targets for one worktree.
+///
+/// The current branch is marked; a branch already live in another worktree is
+/// disabled, matching Git's own rule.
+struct SwitchBranchMenuContent: View {
+    @Environment(RepositoryService.self) private var service
+
+    let worktree: Worktree
+
+    var body: some View {
+        ForEach(service.localBranches) { branch in
+            let isCurrent = branch.refName == worktree.branchRef
+            Button {
+                Task { await service.checkout(branch: branch, in: worktree) }
+            } label: {
+                if isCurrent {
+                    Label(branch.name, systemImage: "checkmark")
+                } else {
+                    Text(branch.name)
+                }
+            }
+            .disabled(isCurrent || service.isCheckedOutElsewhere(branch, from: worktree))
         }
     }
 }

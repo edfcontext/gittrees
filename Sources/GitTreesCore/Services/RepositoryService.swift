@@ -198,6 +198,11 @@ public final class RepositoryService {
         return worktrees.first { $0.id == selectedWorktreePath }
     }
 
+    /// The repository's main worktree, when it is a real checkout rather than a bare repo.
+    public var mainWorktree: Worktree? {
+        worktrees.first { $0.isMain && !$0.isBare }
+    }
+
     public var localBranches: [Branch] {
         branches.filter { $0.kind == .local }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -671,6 +676,9 @@ public final class RepositoryService {
             PresentableError(title: "Could Not Check Out Branch", error: error)
         } thenReturning: { [weak self] in
             await self?.reload()
+            // Show the worktree that just changed, including when the user started
+            // from a branch that had no worktree.
+            self?.selectedWorktreePath = worktree.id
             self?.refreshSelectedWorktree()
         }
     }
@@ -714,6 +722,28 @@ public final class RepositoryService {
             worktree: worktree.path,
             path: change.path,
             staged: staged,
+            contextLines: preferences.diffContextLines
+        )
+    }
+
+    /// Identity, message and files for one commit in the selected worktree.
+    public func commitDetail(hash: String) async throws -> CommitDetail {
+        guard let worktree = selectedWorktree else {
+            throw GitError.unexpectedOutput(
+                reason: "no worktree is selected",
+                arguments: ["log", "-1"]
+            )
+        }
+        return try await client.commitDetail(worktree: worktree.path, hash: hash)
+    }
+
+    /// Unified diff of one path as introduced by `hash`.
+    public func commitDiff(hash: String, path: String) async throws -> String {
+        guard let worktree = selectedWorktree else { return "" }
+        return try await client.commitDiff(
+            worktree: worktree.path,
+            hash: hash,
+            path: path,
             contextLines: preferences.diffContextLines
         )
     }

@@ -35,6 +35,7 @@ Machine-readable output is used wherever Git offers it:
 | Status    | `git status --porcelain=v2 -z --branch --untracked-files=all` |
 | Branches  | `git for-each-ref --format=…%00…` (`%00` is `for-each-ref`'s literal NUL) |
 | History   | `git log -z --format=…%x00…` |
+| Commit    | `git log -1 -z --format=…` and `git diff-tree --name-status -z` |
 
 Hooks and Git configuration are left alone: commits run without `--no-verify`, and the
 process inherits the user's environment, so credential helpers and `pre-commit` hooks
@@ -49,11 +50,16 @@ behave exactly as they do on the command line.
   at launch.
 - **Worktrees** — path, branch, HEAD, detached, locked and prunable state. Create from
   an existing branch or with a new branch (`git worktree add -b`), lock/unlock, prune
-  stale metadata, and remove.
+  stale metadata, and remove. The main worktree's branch can be switched with
+  `git checkout` — from its header, its context menu, or Repository → Switch Main
+  Worktree Branch. A branch already checked out in another worktree is offered but
+  disabled; Git would refuse it.
 - **Branches** — local and (optionally) remote branches, upstream tracking with
   ahead/behind counts. A filled indicator means the branch has a live worktree; clicking
   it selects that worktree instead of attempting a checkout Git would refuse. A branch
-  with no worktree offers *Create Worktree* or *Checkout in Current Worktree*.
+  with no worktree offers *Create Worktree* or *Checkout in Main Worktree*.
+- **History** — a flat commit list for the selected worktree. Selecting a commit shows
+  its message, the files it changed, and a unified diff of the selected file (`git show`).
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
   unified diff (working tree or index), and a commit editor.
 - **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
@@ -181,9 +187,11 @@ project root, and converted to an `.icns` with `sips` and `iconutil`.
 ```
 Sources/
   GitTreesCore/          no SwiftUI — usable from tests
-    Models/              Repository, Worktree, Branch, FileChange, CommitSummary
+    Models/              Repository, Worktree, Branch, FileChange, CommitSummary,
+                         CommitDetail
     Git/                 GitClient, GitCommand, GitProcessRunner, GitError,
-                         WorktreeParser, StatusParser, BranchParser
+                         WorktreeParser, StatusParser, BranchParser,
+                         CommitDetailParser
     Services/            RepositoryService, PreferencesService,
                          WorkspaceLauncher, WorktreePathSuggester
   GitTrees/              the application
@@ -202,11 +210,13 @@ Two layers:
 - **Parser suites** run against fixtures captured verbatim from real repositories
   (`git worktree list --porcelain -z | tr '\0' '|'`), covering the main worktree,
   linked worktrees, detached/locked/prunable state, paths with spaces, non-ASCII branch
-  names, and modified/staged/untracked/renamed/deleted/conflicted status entries.
+  names, and modified/staged/untracked/renamed/deleted/conflicted status entries,
+  plus commit metadata and `name-status -z` file lists.
 - **Integration suite** drives the real `git` binary in throwaway repositories, which is
   the only way to prove the argument vectors are ones Git accepts: `git init` on a
   folder with existing content, worktree lifecycle,
-  branch-already-checked-out refusal, pruning, staging on an unborn HEAD, diffs, commits,
+  branch-already-checked-out refusal, switching the main worktree's branch, pruning, staging on an unborn HEAD, diffs, commits,
+  inspecting a commit's files and patch (including the root commit and a rename),
   hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
   linked worktrees, adding remotes, publishing a branch to a remote that is deliberately
   not called `origin`, and the whole init → commit → add remote → publish path end to end.

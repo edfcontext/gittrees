@@ -423,6 +423,10 @@ public final class GitClient: Sendable {
     // MARK: - History
 
     private static let logFormat = ["%H", "%h", "%an", "%aI", "%D", "%s"].joined(separator: "%x00")
+    /// Field order must match `CommitDetailParser.metadataFieldCount`.
+    static let commitDetailFormat = [
+        "%H", "%h", "%an", "%ae", "%aI", "%P", "%s", "%b"
+    ].joined(separator: "%x00")
 
     /// A flat, chronological commit list. Rendering a commit graph is out of scope.
     public func log(worktree: URL, limit: Int = 200) async throws -> [CommitSummary] {
@@ -458,6 +462,56 @@ public final class GitClient: Sendable {
             index += 6
         }
         return commits
+    }
+
+    /// Identity, message and changed files for one commit.
+    ///
+    /// Files are the first-parent diff (`git diff-tree`), which is what History should
+    /// show for a merge: the change relative to the branch being merged into, not a
+    /// combined diff. A root commit is compared to the empty tree (`--root`).
+    public func commitDetail(worktree: URL, hash: String) async throws -> CommitDetail {
+        let metadata = try await run(
+            ["log", "-1", "-z", "--format=\(Self.commitDetailFormat)", hash],
+            in: worktree
+        )
+        var detail = try CommitDetailParser.parseMetadata(metadata.stdout)
+
+        var arguments = ["diff-tree", "--no-commit-id", "-r", "-z", "-M", "--name-status"]
+        if let parent = detail.parentHashes.first {
+            arguments.append(contentsOf: [parent, detail.hash])
+        } else {
+            arguments.append(contentsOf: ["--root", detail.hash])
+        }
+        let nameStatus = try await run(arguments, in: worktree)
+        detail.files = try CommitDetailParser.parseNameStatus(nameStatus.stdout)
+        return detail
+    }
+
+    /// Unified diff of one path as introduced by `hash`.
+    ///
+    /// `--first-parent` matches `commitDetail`'s file list for merge commits. `--format=`
+    /// suppresses the commit header so the pane is only the patch, like the Changes tab.
+    public func commitDiff(
+        worktree: URL,
+        hash: String,
+        path: String,
+        contextLines: Int = 3
+    ) async throws -> String {
+        let result = try await run(
+            [
+                "show",
+                "--no-color",
+                "--no-ext-diff",
+                "--first-parent",
+                "--format=",
+                "-U\(contextLines)",
+                hash,
+                "--",
+                path
+            ],
+            in: worktree
+        )
+        return result.stdoutText
     }
 
     // MARK: - Execution

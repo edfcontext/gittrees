@@ -104,6 +104,21 @@ struct GitTreesApp: App {
 
             Button("Prune Stale Worktrees") { Task { await service.pruneWorktrees() } }
                 .disabled(service.repository == nil)
+
+            if let main = service.mainWorktree {
+                Divider()
+
+                Menu("Switch Main Worktree Branch") {
+                    ForEach(service.localBranches) { branch in
+                        let isCurrent = branch.refName == main.branchRef
+                        Button(branch.name) {
+                            Task { await service.checkout(branch: branch, in: main) }
+                        }
+                        .disabled(isCurrent || service.isCheckedOutElsewhere(branch, from: main))
+                    }
+                }
+                .disabled(main.isMissingOnDisk)
+            }
         }
 
         CommandGroup(after: .windowArrangement) {

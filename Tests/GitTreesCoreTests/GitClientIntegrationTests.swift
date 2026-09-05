@@ -335,6 +335,46 @@ struct GitClientIntegrationTests {
         #expect(!develop.hasUpstream)
     }
 
+    @Test("checking out a free branch switches the main worktree")
+    func checkoutSwitchesMainWorktree() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try await fixture.git(["branch", "develop"])
+        try await client.checkout(worktree: fixture.repository, branch: "develop")
+
+        var worktrees = try await client.worktrees(repository: fixture.repository)
+        #expect(worktrees.first { $0.isMain }?.branchName == "develop")
+
+        try await client.checkout(worktree: fixture.repository, branch: "main")
+        worktrees = try await client.worktrees(repository: fixture.repository)
+        #expect(worktrees.first { $0.isMain }?.branchName == "main")
+    }
+
+    @Test("checkout of a branch already live in another worktree is refused")
+    func checkoutRefusedWhenCheckedOutElsewhere() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+        let linked = fixture.worktreeRoot("linked")
+
+        try await client.createWorktree(
+            repository: fixture.repository,
+            path: linked,
+            newBranch: "feature/linked",
+            startingAt: "main"
+        )
+
+        await #expect(throws: GitError.self) {
+            try await client.checkout(worktree: fixture.repository, branch: "feature/linked")
+        }
+
+        let worktrees = try await client.worktrees(repository: fixture.repository)
+        #expect(worktrees.first { $0.isMain }?.branchName == "main")
+        #expect(worktrees.first { $0.path == linked.standardizedFileURL }?.branchName == "feature/linked")
+    }
+
     // MARK: - Identity
 
     @Test("the local commit identity can be read, changed and cleared")
@@ -676,6 +716,108 @@ struct GitClientIntegrationTests {
         #expect(history.first?.subject == "update readme")
         #expect(history.first?.authorName == "GitTrees Tests")
         #expect(history.last?.subject == "initial commit")
+    }
+
+    @Test("inspecting a commit returns its message, files and the patch it introduced")
+    func commitInspection() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nchanged\n", to: "README.md")
+        try fixture.write("brand new\n", to: "notes.txt")
+        try await client.stage(worktree: fixture.repository, paths: ["README.md", "notes.txt"])
+        _ = try await client.commit(
+            worktree: fixture.repository,
+            message: "update readme\n\nAdds notes and edits the greeting."
+        )
+
+        let history = try await client.log(worktree: fixture.repository, limit: 5)
+        let head = try #require(history.first)
+        let detail = try await client.commitDetail(worktree: fixture.repository, hash: head.hash)
+
+        #expect(detail.hash == head.hash)
+        #expect(detail.subject == "update readme")
+        #expect(detail.body.contains("Adds notes and edits the greeting."))
+        #expect(detail.authorName == "GitTrees Tests")
+        #expect(detail.authorEmail == "tests@example.com")
+        #expect(!detail.isRoot)
+        #expect(detail.files.contains { $0.path == "README.md" && $0.status == .modified })
+        #expect(detail.files.contains { $0.path == "notes.txt" && $0.status == .added })
+
+        let readme = try await client.commitDiff(
+            worktree: fixture.repository,
+            hash: detail.hash,
+            path: "README.md"
+        )
+        #expect(readme.contains("+changed"))
+
+        let notes = try await client.commitDiff(
+            worktree: fixture.repository,
+            hash: detail.hash,
+            path: "notes.txt"
+        )
+        #expect(notes.contains("+brand new"))
+        #expect(notes.contains("new file"))
+    }
+
+    @Test("the initial commit is inspectable against the empty tree")
+    func rootCommitInspection() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        let history = try await fixture.client.log(worktree: fixture.repository, limit: 5)
+        let root = try #require(history.last)
+        let detail = try await fixture.client.commitDetail(worktree: fixture.repository, hash: root.hash)
+
+        #expect(detail.isRoot)
+        #expect(detail.subject == "initial commit")
+        #expect(detail.files.contains { $0.path == "README.md" && $0.status == .added })
+        #expect(detail.files.contains { $0.path == "src/a.txt" && $0.status == .added })
+
+        let diff = try await fixture.client.commitDiff(
+            worktree: fixture.repository,
+            hash: root.hash,
+            path: "README.md"
+        )
+        #expect(diff.contains("+hello"))
+    }
+
+    @Test("a rename is reported as one file with both paths")
+    func renamedFileInCommit() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        try await fixture.git(["mv", "src/a.txt", "src/a renamed.txt"])
+        try await fixture.git(["commit", "--quiet", "--message", "rename a"])
+
+        let history = try await fixture.client.log(worktree: fixture.repository, limit: 3)
+        let head = try #require(history.first)
+        let detail = try await fixture.client.commitDetail(worktree: fixture.repository, hash: head.hash)
+
+        let renamed = try #require(detail.files.first { $0.status == .renamed })
+        #expect(renamed.path == "src/a renamed.txt")
+        #expect(renamed.originalPath == "src/a.txt")
+
+        let diff = try await fixture.client.commitDiff(
+            worktree: fixture.repository,
+            hash: head.hash,
+            path: "src/a renamed.txt"
+        )
+        #expect(diff.contains("rename") || diff.contains("a renamed.txt"))
+    }
+
+    @Test("inspecting a missing commit is a Git failure")
+    func missingCommitInspection() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        await #expect(throws: GitError.self) {
+            try await fixture.client.commitDetail(
+                worktree: fixture.repository,
+                hash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+            )
+        }
     }
 
     @Test("commit hooks run, so a rejecting pre-commit hook fails the commit")

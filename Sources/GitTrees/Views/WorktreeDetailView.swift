@@ -100,9 +100,7 @@ struct WorktreeHeaderBar: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Text(worktree.branchName ?? worktree.displayName)
-                        .font(.headline)
-                        .lineLimit(1)
+                    branchTitle
 
                     if worktree.isMain { BadgeLabel(text: "main worktree") }
                     if worktree.isLocked {
@@ -141,6 +139,35 @@ struct WorktreeHeaderBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// The main worktree's branch is a menu: switching it is `git checkout` in that
+    /// directory. Linked worktrees keep a static title — they exist for one branch.
+    @ViewBuilder
+    private var branchTitle: some View {
+        let title = worktree.branchName ?? worktree.displayName
+        if worktree.isMain, !worktree.isBare, !worktree.isMissingOnDisk {
+            Menu {
+                SwitchBranchMenuContent(worktree: worktree)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(service.isBusy(worktree))
+            .help("Switch the branch checked out in the main worktree")
+        } else {
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+        }
     }
 
     @ViewBuilder
@@ -364,19 +391,18 @@ struct InactiveBranchView: View {
             Button("Create Worktree…", action: onCreateWorktree)
                 .buttonStyle(.borderedProminent)
 
-            Button("Checkout in Current Worktree") {
-                guard let worktree = currentWorktree else { return }
+            Button("Checkout in Main Worktree") {
+                guard let worktree = service.mainWorktree else { return }
                 Task { await service.checkout(branch: branch, in: worktree) }
             }
-            .disabled(currentWorktree == nil)
-            .help(currentWorktree.map { "Runs git checkout in \($0.path.path)" }
-                  ?? "Select a worktree first.")
+            .disabled(!canCheckoutInMain)
+            .help(service.mainWorktree.map { "Runs git checkout in \($0.path.path)" }
+                  ?? "The repository has no main worktree.")
         }
     }
 
-    /// Checkout targets the main worktree when nothing else is selected, which is the
-    /// only worktree guaranteed to exist.
-    private var currentWorktree: Worktree? {
-        service.selectedWorktree ?? service.worktrees.first { $0.isMain && !$0.isBare }
+    private var canCheckoutInMain: Bool {
+        guard let main = service.mainWorktree else { return false }
+        return !service.isBusy(main)
     }
 }
