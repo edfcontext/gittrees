@@ -1,0 +1,319 @@
+import GitTreesCore
+import SwiftUI
+
+/// The main content area: a header describing the selected worktree, then Changes,
+/// History and Branch Info.
+struct WorktreeDetailView: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case changes = "Changes"
+        case history = "History"
+        case branchInfo = "Branch Info"
+
+        var id: String { rawValue }
+    }
+
+    @Environment(RepositoryService.self) private var service
+    @Environment(PreferencesService.self) private var preferences
+    @Environment(WorkspaceLauncher.self) private var launcher
+
+    let worktree: Worktree
+    let onRequestRemoval: (Worktree) -> Void
+    let onRequestLock: (Worktree) -> Void
+
+    @State private var tab: Tab = .changes
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorktreeHeaderBar(
+                worktree: worktree,
+                onRequestRemoval: onRequestRemoval,
+                onRequestLock: onRequestLock
+            )
+
+            Divider()
+
+            HStack(spacing: 0) {
+                Picker("View", selection: $tab) {
+                    ForEach(Tab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let output = service.lastOperationOutput, !output.isEmpty {
+                OperationOutputBar(text: output) { service.clearOperationOutput() }
+            }
+        }
+        .background(GitTreesUI.barBackground)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if worktree.isMissingOnDisk {
+            MissingWorktreeView(worktree: worktree, onRequestRemoval: onRequestRemoval)
+        } else {
+            switch tab {
+            case .changes:
+                ChangesView()
+            case .history:
+                HistoryView()
+            case .branchInfo:
+                BranchInfoView(worktree: worktree)
+            }
+        }
+    }
+}
+
+/// Branch, path, cleanliness, tracking, and the remote/IDE actions.
+struct WorktreeHeaderBar: View {
+    @Environment(RepositoryService.self) private var service
+    @Environment(PreferencesService.self) private var preferences
+    @Environment(WorkspaceLauncher.self) private var launcher
+
+    let worktree: Worktree
+    let onRequestRemoval: (Worktree) -> Void
+    let onRequestLock: (Worktree) -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: worktree.isDetached ? "arrow.triangle.branch" : "arrow.branch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text(worktree.branchName ?? worktree.displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    if worktree.isMain { BadgeLabel(text: "main worktree") }
+                    if worktree.isLocked {
+                        BadgeLabel(text: worktree.lockReason.map { "locked · \($0)" } ?? "locked", tint: .secondary)
+                    }
+                    if worktree.isPrunable { BadgeLabel(text: "prunable", tint: .orange) }
+
+                    stateBadge
+                }
+
+                HStack(spacing: 8) {
+                    Text(RepositorySidebar.abbreviate(worktree.path))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .layoutPriority(-1)
+                        .help(worktree.path.path)
+
+                    if let tracking = trackingText {
+                        Text(tracking)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                }
+            }
+            // A long worktree path must compress rather than push the actions
+            // off the end of the bar.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(-1)
+
+            actions
+                .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var stateBadge: some View {
+        if service.status.isClean {
+            BadgeLabel(text: "clean", tint: .green)
+        } else {
+            let count = service.status.changes.count
+            BadgeLabel(text: "\(count) change\(count == 1 ? "" : "s")", tint: .orange)
+        }
+    }
+
+    private var trackingText: String? {
+        guard let upstream = service.status.upstream else {
+            return service.branch(for: worktree)?.hasUpstream == false ? "no upstream" : nil
+        }
+        var text = upstream
+        var counts: [String] = []
+        if let ahead = service.status.ahead, ahead > 0 { counts.append("↑\(ahead)") }
+        if let behind = service.status.behind, behind > 0 { counts.append("↓\(behind)") }
+        if !counts.isEmpty { text += "  " + counts.joined(separator: " ") }
+        return text
+    }
+
+    private var actions: some View {
+        HStack(spacing: 6) {
+            Button("Fetch") { Task { await service.fetch() } }
+                .help("git fetch (⇧⌘F)")
+            Button("Pull") { Task { await service.pull() } }
+                .help("git pull (⇧⌘P)")
+            Button(service.selectedBranchNeedsUpstream ? "Push…" : "Push") {
+                Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
+            }
+            .help(service.selectedBranchNeedsUpstream
+                  ? "git push --set-upstream origin \(worktree.branchName ?? "")"
+                  : "git push (⇧⌘U)")
+
+            Divider().frame(height: 16)
+
+            Button {
+                openInPreferredEditor()
+            } label: {
+                Label("Open in \(preferences.preferredEditor.displayName)", systemImage: "arrow.up.forward.app")
+                    .labelStyle(.titleAndIcon)
+            }
+            .help("Open this worktree in \(preferences.preferredEditor.displayName) (⇧⌘D)")
+
+            Menu {
+                WorktreeContextMenu(
+                    worktree: worktree,
+                    onRequestRemoval: onRequestRemoval,
+                    onRequestLock: onRequestLock
+                )
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .controlSize(.small)
+        .disabled(service.isBusy(worktree))
+    }
+
+    private func openInPreferredEditor() {
+        Task {
+            do {
+                try await launcher.open(worktree.path, in: preferences.preferredEditor)
+            } catch {
+                service.lastError = PresentableError(title: "Could Not Open Worktree", error: error)
+            }
+        }
+    }
+}
+
+/// The transient banner showing what fetch/pull/push/commit printed.
+struct OperationOutputBar: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.alignleft")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                ScrollView(.vertical) {
+                    Text(text)
+                        .font(GitTreesUI.monospaced)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 76)
+
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+    }
+}
+
+/// Shown when Git still records a worktree whose directory has been deleted.
+struct MissingWorktreeView: View {
+    @Environment(RepositoryService.self) private var service
+
+    let worktree: Worktree
+    let onRequestRemoval: (Worktree) -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Worktree Directory Is Missing", systemImage: "exclamationmark.triangle")
+        } description: {
+            VStack(spacing: 6) {
+                Text(worktree.path.path)
+                    .font(GitTreesUI.monospaced)
+                    .textSelection(.enabled)
+                if let reason = worktree.prunableReason {
+                    Text("Git reports: \(reason)")
+                        .font(.caption)
+                }
+                Text("The Git metadata for this worktree still exists. Pruning removes the record; nothing on disk is touched.")
+                    .font(.caption)
+            }
+        } actions: {
+            Button("Prune Stale Worktrees") {
+                Task { await service.pruneWorktrees() }
+            }
+            Button("Remove Worktree…") { onRequestRemoval(worktree) }
+        }
+    }
+}
+
+/// Detail pane for a branch with no worktree, offering the two valid next steps.
+struct InactiveBranchView: View {
+    @Environment(RepositoryService.self) private var service
+
+    let branch: Branch
+    let onCreateWorktree: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(branch.name, systemImage: "arrow.branch")
+        } description: {
+            VStack(spacing: 4) {
+                Text("This branch has no worktree.")
+                if let upstream = branch.upstreamName {
+                    Text("Tracks \(upstream)\(branch.trackingSummary.map { " · \($0)" } ?? "")")
+                        .font(.caption)
+                }
+                Text(branch.objectName.prefix(12))
+                    .font(GitTreesUI.monospaced)
+                    .foregroundStyle(.tertiary)
+            }
+        } actions: {
+            Button("Create Worktree…", action: onCreateWorktree)
+                .buttonStyle(.borderedProminent)
+
+            Button("Checkout in Current Worktree") {
+                guard let worktree = currentWorktree else { return }
+                Task { await service.checkout(branch: branch, in: worktree) }
+            }
+            .disabled(currentWorktree == nil)
+            .help(currentWorktree.map { "Runs git checkout in \($0.path.path)" }
+                  ?? "Select a worktree first.")
+        }
+    }
+
+    /// Checkout targets the main worktree when nothing else is selected, which is the
+    /// only worktree guaranteed to exist.
+    private var currentWorktree: Worktree? {
+        service.selectedWorktree ?? service.worktrees.first { $0.isMain && !$0.isBare }
+    }
+}
