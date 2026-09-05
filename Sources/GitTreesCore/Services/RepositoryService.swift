@@ -702,6 +702,34 @@ public final class RepositoryService {
         }
     }
 
+    /// Adds a remote and reloads, so the picker and Branch Info pick it up immediately.
+    @discardableResult
+    public func addRemote(name: String, url: String) async -> Bool {
+        guard let repository else { return false }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedURL.isEmpty else { return false }
+
+        let added = await withOperation(label: "Adding remote…") { [client] in
+            try await client.addRemote(
+                repository: repository.commandDirectory,
+                name: trimmedName,
+                url: trimmedURL
+            )
+        } onFailure: { error in
+            PresentableError(title: "Could Not Add Remote", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            return true
+        }
+        return added ?? false
+    }
+
+    /// Remote names already taken, so the sheet can say so before Git has to.
+    public var remoteNames: Set<String> {
+        Set(remotes.map(\.name))
+    }
+
     public func clearOperationOutput() {
         lastOperationOutput = nil
     }

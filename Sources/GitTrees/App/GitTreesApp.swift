@@ -89,6 +89,11 @@ struct GitTreesApp: App {
 
             Divider()
 
+            Button("Add Remote…") { commands.addRemote() }
+                .disabled(service.repository == nil)
+
+            Divider()
+
             Button("Commit…") { commands.focusCommitMessage() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(hasNoWorktree)
@@ -132,12 +137,14 @@ final class AppCommands {
     var openRepositoryRequested = false
     var newWorktreeRequested = false
     var openInEditorRequested = false
+    var addRemoteRequested = false
     var commitFocusRequested = false
     var pendingRecent: RecentRepository?
 
     func openRepository() { openRepositoryRequested = true }
     func newWorktree() { newWorktreeRequested = true }
     func openInEditor() { openInEditorRequested = true }
+    func addRemote() { addRemoteRequested = true }
     func focusCommitMessage() { commitFocusRequested = true }
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
 }

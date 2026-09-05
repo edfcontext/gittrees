@@ -19,6 +19,7 @@ struct WorktreeDetailView: View {
     let worktree: Worktree
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
+    let onAddRemote: () -> Void
 
     @State private var tab: Tab = .changes
 
@@ -27,7 +28,8 @@ struct WorktreeDetailView: View {
             WorktreeHeaderBar(
                 worktree: worktree,
                 onRequestRemoval: onRequestRemoval,
-                onRequestLock: onRequestLock
+                onRequestLock: onRequestLock,
+                onAddRemote: onAddRemote
             )
 
             Divider()
@@ -85,6 +87,7 @@ struct WorktreeHeaderBar: View {
     let worktree: Worktree
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
+    let onAddRemote: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -211,6 +214,10 @@ struct WorktreeHeaderBar: View {
             }
             .pickerStyle(.inline)
             .labelsHidden()
+
+            Divider()
+
+            Button("Add Remote…") { onAddRemote() }
         } label: {
             Label(service.selectedRemote ?? "Automatic", systemImage: "cloud")
         }

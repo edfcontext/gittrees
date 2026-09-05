@@ -412,6 +412,14 @@ public final class GitClient: Sendable {
         }
     }
 
+    /// `git remote add <name> <url>`.
+    ///
+    /// Git validates the name and rejects a duplicate itself (exit 3), so no rule about
+    /// what a remote may be called is reimplemented here.
+    public func addRemote(repository: URL, name: String, url: String) async throws {
+        _ = try await run(["remote", "add", name, url], in: repository)
+    }
+
     // MARK: - History
 
     private static let logFormat = ["%H", "%h", "%an", "%aI", "%D", "%s"].joined(separator: "%x00")

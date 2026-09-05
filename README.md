@@ -56,9 +56,9 @@ behave exactly as they do on the command line.
   with no worktree offers *Create Worktree* or *Checkout in Current Worktree*.
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
   unified diff (working tree or index), and a commit editor.
-- **Remotes** — fetch, pull and push against a chosen remote, with `--set-upstream`
-  offered for a branch that has never been pushed. Git's stdout and stderr are shown
-  verbatim.
+- **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
+  `--set-upstream` offered for a branch that has never been pushed. Git's stdout and
+  stderr are shown verbatim.
 - **Commit identity** — shows who a commit would be authored as and where that came
   from, and can pin an identity on the repository. See below.
 - **Workspace** — open a worktree in Finder, Terminal, IntelliJ IDEA, VS Code or Cursor
@@ -70,7 +70,13 @@ A worktree with local changes is never removed by default. GitTrees runs `git st
 first and, if anything would be lost, shows what it found and requires an explicit
 opt-in before passing `--force`.
 
-### Choosing a remote
+### Remotes
+
+**Add Remote…** (Repository menu, the toolbar's remote menu, or Settings → Remote) runs
+`git remote add <name> <url>`. `origin` is offered as the name for a repository that has
+none yet. Renaming, changing a URL and removing a remote are still command-line work —
+this exists so a repository created with `git init` here can be connected to something,
+which otherwise left Push with nowhere to go.
 
 A picker appears beside Fetch/Pull/Push once a repository has more than one remote, and
 the choice is remembered per repository.
@@ -172,8 +178,8 @@ Two layers:
   folder with existing content, worktree lifecycle,
   branch-already-checked-out refusal, pruning, staging on an unborn HEAD, diffs, commits,
   hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
-  linked worktrees, and publishing a branch to a remote that is deliberately not called
-  `origin`.
+  linked worktrees, adding remotes, publishing a branch to a remote that is deliberately
+  not called `origin`, and the whole init → commit → add remote → publish path end to end.
 
 ## Notes
 

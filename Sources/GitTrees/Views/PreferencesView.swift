@@ -13,6 +13,7 @@ struct PreferencesView: View {
     @State private var emailDraft = ""
     @State private var choosingWorktreeRoot = false
     @State private var choosingGitExecutable = false
+    @State private var addingRemote = false
 
     var body: some View {
         @Bindable var preferences = preferences
@@ -229,8 +230,16 @@ struct PreferencesView: View {
             }
             .disabled(service.remotes.isEmpty)
 
+            Button("Add Remote…") { addingRemote = true }
+                // The Settings window presents its own sheet; the main window's
+                // presenter belongs to a different scene.
+                .sheet(isPresented: $addingRemote) {
+                    AddRemoteSheet()
+                        .environment(service)
+                }
+
             if service.remotes.isEmpty {
-                Text("This repository has no remotes configured.")
+                Text("This repository has no remotes configured. Add one to fetch, pull or publish a branch.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

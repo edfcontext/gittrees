@@ -414,6 +414,103 @@ struct GitClientIntegrationTests {
         #expect(remotes.first { $0.name == "gitea" }?.fetchURL == "https://git.internal/summit.git")
     }
 
+    @Test("a remote can be added, and is then listed with its URL")
+    func addRemote() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        #expect(try await client.remotes(repository: fixture.repository).isEmpty)
+
+        try await client.addRemote(
+            repository: fixture.repository,
+            name: "origin",
+            url: "git@github.com:owner/summit.git"
+        )
+
+        let remotes = try await client.remotes(repository: fixture.repository)
+        #expect(remotes.count == 1)
+        #expect(remotes[0].name == "origin")
+        #expect(remotes[0].fetchURL == "git@github.com:owner/summit.git")
+    }
+
+    @Test("adding a remote whose name is taken is refused by Git")
+    func addDuplicateRemote() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try await client.addRemote(
+            repository: fixture.repository,
+            name: "origin",
+            url: "https://example.com/a.git"
+        )
+        await #expect(throws: GitError.self) {
+            try await client.addRemote(
+                repository: fixture.repository,
+                name: "origin",
+                url: "https://example.com/b.git"
+            )
+        }
+
+        // The original must be untouched by the failed attempt.
+        let remotes = try await client.remotes(repository: fixture.repository)
+        #expect(remotes.map(\.fetchURL) == ["https://example.com/a.git"])
+    }
+
+    @Test("a remote name Git rejects is surfaced as an error, not silently accepted")
+    func addRemoteWithInvalidName() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        await #expect(throws: GitError.self) {
+            try await fixture.client.addRemote(
+                repository: fixture.repository,
+                name: "bad name/../..",
+                url: "https://example.com/a.git"
+            )
+        }
+        #expect(try await fixture.client.remotes(repository: fixture.repository).isEmpty)
+    }
+
+    @Test("a repository created here can be given a remote and then publish to it")
+    func initThenAddRemoteThenPublish() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-e2e-\(UUID().uuidString)", isDirectory: true)
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = GitClient()
+        let runner = GitProcessRunner()
+        func git(_ arguments: [String], in directory: URL) async throws {
+            _ = try await runner.run(GitCommand(arguments, workingDirectory: directory))
+        }
+
+        // The whole flow the Add Remote feature exists to unblock: init, commit,
+        // add a remote, publish.
+        try await client.initializeRepository(at: workspace)
+        try await git(["config", "user.email", "tests@example.com"], in: workspace)
+        try await git(["config", "user.name", "GitTrees Tests"], in: workspace)
+        try "hello\n".write(
+            to: workspace.appendingPathComponent("README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try await client.stage(worktree: workspace, paths: ["README.md"])
+        _ = try await client.commit(worktree: workspace, message: "initial commit")
+
+        let server = root.appendingPathComponent("server.git", isDirectory: true)
+        try await git(["init", "--quiet", "--bare", server.path], in: root)
+        try await client.addRemote(repository: workspace, name: "origin", url: server.path)
+
+        _ = try await client.push(worktree: workspace, remote: "origin", setUpstream: true)
+
+        let branches = try await client.branches(repository: workspace)
+        let current = try #require(branches.first { $0.worktreePath != nil })
+        #expect(current.upstreamName == "origin/\(current.name)")
+    }
+
     @Test("publishing a branch uses the named remote rather than assuming origin")
     func pushSetsUpstreamOnNamedRemote() async throws {
         let fixture = try await Fixture()
