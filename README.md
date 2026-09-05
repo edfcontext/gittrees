@@ -47,7 +47,9 @@ behave exactly as they do on the command line.
   (⌘O); a linked worktree resolves to the repository it belongs to. Choosing a folder
   that is not yet a repository offers to `git init` it in place, leaving anything
   already there untouched. Recents are remembered and the last repository is reopened
-  at launch.
+  at launch. Each window holds one repository: **New Window** (⇧⌘N) opens another, and
+  opening a repository while one is already open creates a new window rather than
+  replacing it.
 - **Worktrees** — path, branch, HEAD, detached, locked and prunable state. Create from
   an existing branch or with a new branch (`git worktree add -b`), lock/unlock, prune
   stale metadata, and remove. The main worktree's branch can be switched with

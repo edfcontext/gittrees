@@ -325,6 +325,7 @@ public final class RepositoryService {
     }
 
     private func reload() async {
+        rebuildClientIfNeeded()
         guard let repository else { return }
         isRefreshing = true
         defer { isRefreshing = false }

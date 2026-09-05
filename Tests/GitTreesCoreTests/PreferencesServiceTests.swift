@@ -92,4 +92,19 @@ struct PreferencesServiceTests {
                 == "/Users/me/Development/nalcus/worktrees/summit"
         )
     }
+
+    @Test("only the first window consumes the launch restore")
+    func launchRestoreIsConsumedOnce() {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.restoreLastRepository = true
+        preferences.noteOpened(Self.repository(at: "/tmp"))
+
+        let first = preferences.consumeLaunchRestore()
+        #expect(first?.path == "/tmp")
+        #expect(preferences.consumeLaunchRestore() == nil)
+        #expect(preferences.repositoryToRestore()?.path == "/tmp")
+    }
 }

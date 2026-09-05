@@ -95,6 +95,9 @@ public final class PreferencesService {
         didSet { defaults.set(lastRepositoryPath, forKey: Key.lastRepositoryPath) }
     }
 
+    /// In-memory: the first window at launch consumes this so later windows stay empty.
+    private var didConsumeLaunchRestore = false
+
     // MARK: - Recent repositories
 
     public func noteOpened(_ repository: Repository) {
@@ -124,6 +127,14 @@ public final class PreferencesService {
             return nil
         }
         return URL(fileURLWithPath: path)
+    }
+
+    /// Returns the launch-restore URL once. Extra windows opened afterwards stay empty
+    /// rather than all reopening the same repository.
+    public func consumeLaunchRestore() -> URL? {
+        guard !didConsumeLaunchRestore else { return nil }
+        didConsumeLaunchRestore = true
+        return repositoryToRestore()
     }
 
     // MARK: - Per-repository worktree root

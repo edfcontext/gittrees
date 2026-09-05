@@ -14,6 +14,8 @@ struct MainView: View {
     @Environment(PreferencesService.self) private var preferences
     @Environment(WorkspaceLauncher.self) private var launcher
     @Environment(AppCommands.self) private var commands
+    @Environment(AppSession.self) private var session
+    @Environment(\.openWindow) private var openWindow
 
     @State private var selection: SidebarItem?
     @State private var showingOpenPanel = false
@@ -110,7 +112,7 @@ struct MainView: View {
         .onChange(of: commands.pendingRecent) { _, recent in
             guard let recent else { return }
             commands.pendingRecent = nil
-            Task { await service.open(directory: recent.path) }
+            Task { await openRepository(at: recent.path) }
         }
         .onChange(of: commands.addRemoteRequested) { _, requested in
             if requested {
@@ -129,6 +131,11 @@ struct MainView: View {
             commands.openInEditorRequested = false
             guard let worktree = service.selectedWorktree else { return }
             Task { await openWorktree(worktree, in: preferences.preferredEditor) }
+        }
+        .onChange(of: commands.newWindowRequested) { _, requested in
+            guard requested else { return }
+            commands.newWindowRequested = false
+            openWindow(id: GitTreesScene.repositoryWindowID)
         }
     }
 
@@ -233,13 +240,28 @@ struct MainView: View {
     private func restoreIfNeeded() async {
         guard !hasRestored else { return }
         hasRestored = true
-        guard let url = preferences.repositoryToRestore() else { return }
+        if let pending = session.takePendingDirectory() {
+            await service.open(directory: pending)
+            return
+        }
+        guard let url = preferences.consumeLaunchRestore() else { return }
         await service.open(directory: url)
     }
 
     private func handleOpenPanel(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        Task { await service.open(directory: url) }
+        Task { await openRepository(at: url) }
+    }
+
+    /// Opens in this window when it is empty; otherwise creates another window so two
+    /// projects can stay open at once.
+    private func openRepository(at url: URL) async {
+        if service.repository != nil {
+            session.pendingDirectory = url
+            openWindow(id: GitTreesScene.repositoryWindowID)
+        } else {
+            await service.open(directory: url)
+        }
     }
 
     /// Reads the worktree's status first: a dirty worktree must never be removed
