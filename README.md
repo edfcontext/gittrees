@@ -61,6 +61,8 @@ behave exactly as they do on the command line.
   stderr are shown verbatim.
 - **Commit identity** — shows who a commit would be authored as and where that came
   from, and can pin an identity on the repository. See below.
+- **Pull requests** — open a pull request for the selected worktree's branch through the
+  GitHub CLI (`gh pr create`), and see the one already open for it. See below.
 - **Workspace** — open a worktree in Finder, Terminal, IntelliJ IDEA, VS Code or Cursor
   via `NSWorkspace`; the preferred IDE is stored in Settings.
 
@@ -119,9 +121,37 @@ Suggested:     ~/Development/nalcus/worktrees/summit/zpl-templates
 The suggestion updates as you type and can be overridden; the root is configurable per
 repository in Settings.
 
+### Pull requests (GitHub CLI)
+
+GitTrees drives the [GitHub CLI](https://cli.github.com) rather than talking to the
+GitHub API itself — gh already owns authentication, so there are no tokens to manage in
+the app. Point Settings → GitHub at the `gh` binary (the common Homebrew and MacPorts
+locations are probed by default); the section shows, live, whether gh is installed and
+which account it is signed in as.
+
+**Create Pull Request…** (Repository menu, or the toolbar button that appears when the
+repository has a GitHub remote) opens a sheet for the selected worktree's branch. The
+head is fixed — it is the branch that worktree has checked out — and the sheet runs in
+the worktree's directory, so gh sees the right branch as HEAD. You choose the base, edit
+a title (prefilled from the last commit) and body, and optionally mark it a draft; it
+then runs:
+
+```
+gh pr create --title <t> --body <b> --base <base> --head <branch> [--draft]
+```
+
+Preconditions are shown up front rather than surfaced as a failure after you have
+written a description: gh must be installed and signed in, the repository needs a GitHub
+remote, and the branch must have been pushed. When a pull request is already open for the
+branch, the sheet shows it instead, with **Open in Browser** (`gh pr view --web`).
+
+Signing in (`gh auth login`) and enterprise-host configuration stay in the terminal,
+where gh's own interactive flow belongs; GitTrees never runs interactive gh commands.
+
 ## Not in this version
 
-GitHub/GitLab integration, pull requests, issues, interactive rebase, merge editor,
+GitLab integration, issue tracking, PR review and merge (only *creating* a pull request
+is supported, via the GitHub CLI), interactive rebase, merge editor,
 hunk or line staging, submodules, LFS, SSH keys, credential UI, cloning, signing
 configuration, bisect, reflog, stash, blame, tags, and commit-graph rendering. The
 architecture leaves room for these; the scope deliberately does not include them.
@@ -180,6 +210,9 @@ Two layers:
   hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
   linked worktrees, adding remotes, publishing a branch to a remote that is deliberately
   not called `origin`, and the whole init → commit → add remote → publish path end to end.
+  The GitHub CLI layer is covered by a mock runner (exact `gh` argument vectors, and
+  decoding gh's real `pr view --json` payload) plus, where gh is installed, live checks
+  that `auth` and a `pr view` lookup behave and never crash.
 
 ## Notes
 

@@ -90,7 +90,9 @@ struct GitTreesApp: App {
             Divider()
 
             Button("Add Remote…") { commands.addRemote() }
-                .disabled(service.repository == nil)
+
+            Button("Create Pull Request…") { commands.createPullRequest() }
+                .disabled(hasNoWorktree)
 
             Divider()
 
@@ -138,6 +140,7 @@ final class AppCommands {
     var newWorktreeRequested = false
     var openInEditorRequested = false
     var addRemoteRequested = false
+    var createPullRequestRequested = false
     var commitFocusRequested = false
     var pendingRecent: RecentRepository?
 
@@ -145,6 +148,7 @@ final class AppCommands {
     func newWorktree() { newWorktreeRequested = true }
     func openInEditor() { openInEditorRequested = true }
     func addRemote() { addRemoteRequested = true }
+    func createPullRequest() { createPullRequestRequested = true }
     func focusCommitMessage() { commitFocusRequested = true }
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
 }

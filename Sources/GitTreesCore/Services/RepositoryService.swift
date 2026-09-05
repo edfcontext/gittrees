@@ -17,7 +17,7 @@ public struct PresentableError: Identifiable, Sendable {
 
     public init(title: String, error: Error) {
         self.title = title
-        if let gitError = error as? GitError, let failure = gitError.failure {
+        if let failure = (error as? CommandExecutionError)?.failure {
             self.message = failure.message
             self.detail = """
             \(failure.commandLine)
@@ -98,6 +98,10 @@ public final class RepositoryService {
     public private(set) var remotes: [Remote] = []
     /// The commit identity a commit in the selected worktree would use.
     public private(set) var identity: GitIdentity = .unknown
+    /// GitHub CLI installation and sign-in state.
+    public private(set) var gitHubAuth: GitHubAuth = .unknown
+    /// The pull request already open for the selected worktree's branch, if any.
+    public private(set) var pullRequest: PullRequest?
 
     /// Path of the selected worktree. Paths, not indices, so a refresh cannot
     /// silently move the selection to a different worktree.
@@ -107,8 +111,10 @@ public final class RepositoryService {
             status = .empty
             history = []
             selectedFile = nil
+            pullRequest = nil
             refreshSelectedWorktree()
             Task { await refreshIdentity() }
+            refreshGitHub()
         }
     }
 
@@ -131,6 +137,8 @@ public final class RepositoryService {
     private let preferences: PreferencesService
     private var client: GitClient
     private var gitExecutablePath: String
+    private var gitHubClient: GitHubClient
+    private var gitHubExecutablePath: String
 
     /// Worktrees with a destructive operation in flight.
     ///
@@ -140,11 +148,14 @@ public final class RepositoryService {
     private var refreshTask: Task<Void, Never>?
     private var dirtyScanTask: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
+    private var gitHubTask: Task<Void, Never>?
 
     public init(preferences: PreferencesService) {
         self.preferences = preferences
         self.gitExecutablePath = preferences.gitExecutablePath
         self.client = GitClient(runner: GitProcessRunner(executablePath: preferences.gitExecutablePath))
+        self.gitHubExecutablePath = preferences.gitHubExecutablePath
+        self.gitHubClient = GitHubClient(runner: GitHubProcessRunner(executablePath: preferences.gitHubExecutablePath))
     }
 
     // MARK: - Derived state
@@ -292,6 +303,8 @@ public final class RepositoryService {
         dirtyStates = [:]
         remotes = []
         identity = .unknown
+        gitHubAuth = .unknown
+        pullRequest = nil
         uninitializedDirectory = nil
     }
 
@@ -329,6 +342,7 @@ public final class RepositoryService {
             }
             scanDirtyStates()
             await refreshIdentity()
+            refreshGitHub()
         } catch is CancellationError {
             return
         } catch {
@@ -397,6 +411,100 @@ public final class RepositoryService {
         } else {
             self.selectedFile = nil
         }
+    }
+
+    // MARK: - GitHub
+
+    /// True when at least one remote points at GitHub.
+    public var hasGitHubRemote: Bool {
+        remotes.contains { ($0.fetchURL).map(GitHubClient.isGitHubRemoteURL) ?? false }
+    }
+
+    /// The branch a pull request from the selected worktree would merge into.
+    ///
+    /// A conventional default branch when one exists, falling back to any local branch
+    /// other than the head itself. Only ever a suggestion — the user can change it.
+    public var defaultBaseBranch: String? {
+        let head = selectedWorktree?.branchName
+        let names = localBranches.map(\.name)
+        for candidate in ["main", "master", "develop", "trunk"] where names.contains(candidate) {
+            if candidate != head { return candidate }
+        }
+        return names.first { $0 != head } ?? names.first
+    }
+
+    /// The branch a pull request would be opened from: the selected worktree's branch.
+    public var pullRequestHeadBranch: String? {
+        guard let worktree = selectedWorktree, !worktree.isDetached else { return nil }
+        return worktree.branchName
+    }
+
+    /// Everything that must hold before `gh pr create` can run, or the reason it cannot.
+    public var pullRequestBlocker: String? {
+        guard repository != nil else { return "No repository is open." }
+        if !gitHubAuth.isInstalled { return "The GitHub CLI is not installed." }
+        if !gitHubAuth.isAuthenticated { return "You are not signed in to GitHub." }
+        if !hasGitHubRemote { return "This repository has no GitHub remote." }
+        guard let head = pullRequestHeadBranch else {
+            return "Select a worktree with a branch checked out."
+        }
+        if branch(for: selectedWorktree ?? Worktree(path: URL(fileURLWithPath: "/")))?.hasUpstream == false {
+            return "The branch \(head) has not been pushed yet."
+        }
+        return nil
+    }
+
+    public var canCreatePullRequest: Bool {
+        pullRequestBlocker == nil
+    }
+
+    /// Reloads gh auth state and, when possible, the pull request open for the selected
+    /// worktree. Cheap enough to run after every repository refresh.
+    public func refreshGitHub() {
+        gitHubTask?.cancel()
+        let client = self.gitHubClient
+        let executablePath = self.gitHubExecutablePath
+        let worktree = selectedWorktree
+        let lookupPossible = hasGitHubRemote
+        gitHubTask = Task { [weak self] in
+            let auth = await client.auth(executablePath: executablePath)
+            guard !Task.isCancelled else { return }
+            self?.gitHubAuth = auth
+
+            guard auth.isReady, lookupPossible,
+                  let worktree, !worktree.isBare, !worktree.isMissingOnDisk else {
+                self?.pullRequest = nil
+                return
+            }
+            let pr = try? await client.pullRequest(worktree: worktree.path)
+            guard !Task.isCancelled, self?.selectedWorktreePath == worktree.id else { return }
+            self?.pullRequest = pr
+        }
+    }
+
+    /// Opens a pull request with `gh pr create`, then records it so the UI can link to it.
+    public func createPullRequest(_ draft: PullRequestDraft) async -> PullRequest? {
+        guard let worktree = selectedWorktree else { return nil }
+        let created = await withOperation(label: "Creating pull request…", worktree: worktree) { [gitHubClient] in
+            try await gitHubClient.createPullRequest(worktree: worktree.path, draft: draft)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Create Pull Request", error: error)
+        } thenReturning: { [weak self] (pr: PullRequest) -> PullRequest in
+            self?.pullRequest = pr
+            self?.lastOperationOutput = "Created pull request #\(pr.number)\n\(pr.url)"
+            return pr
+        }
+        return created
+    }
+
+    /// Opens the pull request (or its create page) in the browser.
+    public func openPullRequestInBrowser() async {
+        guard let worktree = selectedWorktree else { return }
+        _ = await withOperation(label: "Opening browser…", worktree: worktree) { [gitHubClient] in
+            try await gitHubClient.openPullRequestInBrowser(worktree: worktree.path)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Open Pull Request", error: error)
+        } thenReturning: { }
     }
 
     // MARK: - Commit identity
@@ -736,11 +844,17 @@ public final class RepositoryService {
 
     // MARK: - Preferences plumbing
 
-    /// Recreates the Git client when the user points at a different git binary.
+    /// Recreates the Git and GitHub clients when the user points at a different binary.
     public func rebuildClientIfNeeded() {
-        guard preferences.gitExecutablePath != gitExecutablePath else { return }
-        gitExecutablePath = preferences.gitExecutablePath
-        client = GitClient(runner: GitProcessRunner(executablePath: gitExecutablePath))
+        if preferences.gitExecutablePath != gitExecutablePath {
+            gitExecutablePath = preferences.gitExecutablePath
+            client = GitClient(runner: GitProcessRunner(executablePath: gitExecutablePath))
+        }
+        if preferences.gitHubExecutablePath != gitHubExecutablePath {
+            gitHubExecutablePath = preferences.gitHubExecutablePath
+            gitHubClient = GitHubClient(runner: GitHubProcessRunner(executablePath: gitHubExecutablePath))
+            refreshGitHub()
+        }
     }
 
     // MARK: - Operation scaffolding

@@ -81,6 +81,8 @@ struct MainView: View {
                 LockWorktreeSheet(worktree: worktree)
             case .addRemote:
                 AddRemoteSheet()
+            case .createPullRequest:
+                CreatePullRequestSheet()
             }
         }
         .alert(
@@ -116,6 +118,12 @@ struct MainView: View {
                 commands.addRemoteRequested = false
             }
         }
+        .onChange(of: commands.createPullRequestRequested) { _, requested in
+            if requested {
+                if service.repository != nil { activeSheet = .createPullRequest }
+                commands.createPullRequestRequested = false
+            }
+        }
         .onChange(of: commands.openInEditorRequested) { _, requested in
             guard requested else { return }
             commands.openInEditorRequested = false
@@ -135,7 +143,8 @@ struct MainView: View {
                 worktree: worktree,
                 onRequestRemoval: { requestRemoval(of: $0) },
                 onRequestLock: { activeSheet = .lockWorktree($0) },
-                onAddRemote: { activeSheet = .addRemote }
+                onAddRemote: { activeSheet = .addRemote },
+                onCreatePullRequest: { activeSheet = .createPullRequest }
             )
         } else if case .branch(let ref) = selection,
                   let branch = service.branches.first(where: { $0.refName == ref }) {
@@ -265,6 +274,7 @@ enum ActiveSheet: Identifiable {
     case removeWorktree(WorktreeRemoval)
     case lockWorktree(Worktree)
     case addRemote
+    case createPullRequest
 
     var id: String {
         switch self {
@@ -272,6 +282,7 @@ enum ActiveSheet: Identifiable {
         case .removeWorktree(let removal): "remove-\(removal.id)"
         case .lockWorktree(let worktree): "lock-\(worktree.id)"
         case .addRemote: "add-remote"
+        case .createPullRequest: "create-pull-request"
         }
     }
 }

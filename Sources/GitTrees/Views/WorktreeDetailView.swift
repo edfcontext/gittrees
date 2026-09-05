@@ -20,6 +20,7 @@ struct WorktreeDetailView: View {
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
     let onAddRemote: () -> Void
+    let onCreatePullRequest: () -> Void
 
     @State private var tab: Tab = .changes
 
@@ -29,7 +30,8 @@ struct WorktreeDetailView: View {
                 worktree: worktree,
                 onRequestRemoval: onRequestRemoval,
                 onRequestLock: onRequestLock,
-                onAddRemote: onAddRemote
+                onAddRemote: onAddRemote,
+                onCreatePullRequest: onCreatePullRequest
             )
 
             Divider()
@@ -88,6 +90,7 @@ struct WorktreeHeaderBar: View {
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
     let onAddRemote: () -> Void
+    let onCreatePullRequest: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -176,6 +179,11 @@ struct WorktreeHeaderBar: View {
             }
             .help(pushHelp)
 
+            if service.hasGitHubRemote {
+                Button(pullRequestButtonTitle) { onCreatePullRequest() }
+                    .help(pullRequestButtonHelp)
+            }
+
             Divider().frame(height: 16)
 
             Button {
@@ -231,6 +239,18 @@ struct WorktreeHeaderBar: View {
             get: { service.selectedRemote },
             set: { service.selectedRemote = $0 }
         )
+    }
+
+    private var pullRequestButtonTitle: String {
+        if let pr = service.pullRequest, pr.isOpen { return "PR #\(pr.number)" }
+        return "Pull Request…"
+    }
+
+    private var pullRequestButtonHelp: String {
+        if let pr = service.pullRequest, pr.isOpen {
+            return "View pull request #\(pr.number) for this branch"
+        }
+        return "Open a pull request with gh pr create"
     }
 
     private var pushHelp: String {

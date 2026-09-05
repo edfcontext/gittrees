@@ -5,13 +5,23 @@ import Foundation
 /// Git failures are ordinary application states, so the full context is preserved:
 /// the argument vector, the working directory, the exit code and both output streams.
 public struct GitFailure: Sendable, Hashable {
+    /// The program that ran, e.g. `git` or `gh`. Used only for display.
+    public var program: String
     public var arguments: [String]
     public var workingDirectory: String?
     public var exitCode: Int32
     public var stdout: String
     public var stderr: String
 
-    public init(arguments: [String], workingDirectory: String?, exitCode: Int32, stdout: String, stderr: String) {
+    public init(
+        program: String = "git",
+        arguments: [String],
+        workingDirectory: String?,
+        exitCode: Int32,
+        stdout: String,
+        stderr: String
+    ) {
+        self.program = program
         self.arguments = arguments
         self.workingDirectory = workingDirectory
         self.exitCode = exitCode
@@ -21,17 +31,23 @@ public struct GitFailure: Sendable, Hashable {
 
     /// `git worktree add …` — for showing the user what actually ran.
     public var commandLine: String {
-        (["git"] + arguments).joined(separator: " ")
+        ([program] + arguments).joined(separator: " ")
     }
 
-    /// Git's own message, preferring stderr and falling back to stdout.
+    /// The program's own message, preferring stderr and falling back to stdout.
     public var message: String {
         let err = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         if !err.isEmpty { return err }
         let out = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !out.isEmpty { return out }
-        return "git exited with status \(exitCode)."
+        return "\(program) exited with status \(exitCode)."
     }
+}
+
+/// An error that wraps a failed external-command invocation. Both `GitError` and
+/// `GitHubError` adopt it so `PresentableError` can surface either uniformly.
+public protocol CommandExecutionError {
+    var failure: GitFailure? { get }
 }
 
 public enum GitError: Error, LocalizedError, Sendable {
@@ -93,3 +109,5 @@ public enum GitError: Error, LocalizedError, Sendable {
         return nil
     }
 }
+
+extension GitError: CommandExecutionError {}

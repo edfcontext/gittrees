@@ -13,6 +13,7 @@ struct PreferencesView: View {
     @State private var emailDraft = ""
     @State private var choosingWorktreeRoot = false
     @State private var choosingGitExecutable = false
+    @State private var choosingGitHubExecutable = false
     @State private var addingRemote = false
 
     var body: some View {
@@ -74,6 +75,53 @@ struct PreferencesView: View {
                     }
                 }
                 Toggle("Open new worktrees in the preferred IDE", isOn: $preferences.openInEditorAfterCreate)
+            }
+
+            Section("GitHub") {
+                LabelledFieldRow(label: "GitHub CLI (gh)") {
+                    HStack(spacing: 6) {
+                        TextField("", text: $preferences.gitHubExecutablePath)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(GitTreesUI.monospaced)
+                        Button("Choose…") { choosingGitHubExecutable = true }
+                            .fileImporter(
+                                isPresented: $choosingGitHubExecutable,
+                                allowedContentTypes: [.unixExecutable, .executable],
+                                allowsMultipleSelection: false
+                            ) { result in
+                                guard case .success(let urls) = result,
+                                      let url = urls.first else { return }
+                                preferences.gitHubExecutablePath = url.path
+                                service.rebuildClientIfNeeded()
+                            }
+                    }
+                }
+
+                if gitHubExecutableIsValid {
+                    LabeledContent("Status") {
+                        Label(service.gitHubAuth.summary, systemImage: gitHubStatusSymbol)
+                            .foregroundStyle(gitHubStatusTint)
+                    }
+                    if !service.gitHubAuth.isAuthenticated {
+                        Text("Run gh auth login in a terminal to sign in, then Check Again.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Check Again") { service.refreshGitHub() }
+                } else {
+                    Label(
+                        "No executable at this path. Pull request features are unavailable until it is corrected.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+
+                    Button("Reset to \(GitHubProcessRunner.defaultExecutablePath)") {
+                        preferences.gitHubExecutablePath = GitHubProcessRunner.defaultExecutablePath
+                        service.rebuildClientIfNeeded()
+                    }
+                }
             }
 
             Section("Repository") {
@@ -259,6 +307,21 @@ struct PreferencesView: View {
 
     private var gitExecutableIsValid: Bool {
         FileManager.default.isExecutableFile(atPath: preferences.gitExecutablePath)
+    }
+
+    private var gitHubExecutableIsValid: Bool {
+        FileManager.default.isExecutableFile(atPath: preferences.gitHubExecutablePath)
+    }
+
+    private var gitHubStatusSymbol: String {
+        if service.gitHubAuth.isReady { return "checkmark.seal.fill" }
+        if service.gitHubAuth.isInstalled { return "person.crop.circle.badge.exclamationmark" }
+        return "xmark.seal"
+    }
+
+    private var gitHubStatusTint: Color {
+        if service.gitHubAuth.isReady { return .green }
+        return .secondary
     }
 
     private func syncDraft() {

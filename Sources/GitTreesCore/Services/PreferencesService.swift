@@ -10,6 +10,7 @@ import Observation
 public final class PreferencesService {
     private enum Key {
         static let gitExecutablePath = "gitExecutablePath"
+        static let gitHubExecutablePath = "gitHubExecutablePath"
         static let preferredEditor = "preferredEditor"
         static let openInEditorAfterCreate = "openInEditorAfterCreate"
         static let recentRepositories = "recentRepositories"
@@ -30,6 +31,8 @@ public final class PreferencesService {
         self.defaults = defaults
         self.gitExecutablePath = defaults.string(forKey: Key.gitExecutablePath)
             ?? GitProcessRunner.defaultExecutablePath
+        self.gitHubExecutablePath = defaults.string(forKey: Key.gitHubExecutablePath)
+            ?? GitHubProcessRunner.defaultExecutablePath
         self.preferredEditor = defaults.string(forKey: Key.preferredEditor)
             .flatMap(WorkspaceApplication.init(rawValue:)) ?? .intelliJ
         self.openInEditorAfterCreate = defaults.object(forKey: Key.openInEditorAfterCreate) as? Bool ?? false
@@ -48,6 +51,12 @@ public final class PreferencesService {
     /// newer Git from Homebrew can point this at `/opt/homebrew/bin/git`.
     public var gitExecutablePath: String {
         didSet { defaults.set(gitExecutablePath, forKey: Key.gitExecutablePath) }
+    }
+
+    /// Which `gh` binary to run. Defaults to the first known install location; a user
+    /// whose GitHub CLI lives elsewhere can point this at it.
+    public var gitHubExecutablePath: String {
+        didSet { defaults.set(gitHubExecutablePath, forKey: Key.gitHubExecutablePath) }
     }
 
     public var preferredEditor: WorkspaceApplication {
