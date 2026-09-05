@@ -185,3 +185,7 @@ Two layers:
 - A working directory that has vanished is rejected before `Process.run()`, which
   otherwise raises an Objective-C exception that Swift cannot catch — the case a worktree
   deleted from under the application would hit.
+- SwiftUI presents only one of several same-kind presentation modifiers attached to a
+  single view. Every modal in the window therefore goes through one `.sheet(item:)`
+  driven by `ActiveSheet`, and each `.fileImporter` is attached to the button that opens
+  it, rather than stacking modifiers and having all but the last silently do nothing.

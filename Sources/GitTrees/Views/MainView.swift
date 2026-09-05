@@ -17,9 +17,7 @@ struct MainView: View {
 
     @State private var selection: SidebarItem?
     @State private var showingOpenPanel = false
-    @State private var showingNewWorktreeSheet = false
-    @State private var removalTarget: WorktreeRemoval?
-    @State private var lockPrompt: Worktree?
+    @State private var activeSheet: ActiveSheet?
     @State private var hasRestored = false
 
     var body: some View {
@@ -28,10 +26,10 @@ struct MainView: View {
         NavigationSplitView {
             RepositorySidebar(
                 selection: $selection,
-                onNewWorktree: { showingNewWorktreeSheet = true },
+                onNewWorktree: { activeSheet = .newWorktree },
                 onOpenRepository: { showingOpenPanel = true },
                 onRequestRemoval: { requestRemoval(of: $0) },
-                onRequestLock: { lockPrompt = $0 }
+                onRequestLock: { activeSheet = .lockWorktree($0) }
             )
             .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 420)
         } detail: {
@@ -73,14 +71,15 @@ struct MainView: View {
         ) { result in
             handleOpenPanel(result)
         }
-        .sheet(isPresented: $showingNewWorktreeSheet) {
-            NewWorktreeSheet(preselectedBranch: preselectedBranchForSheet)
-        }
-        .sheet(item: $removalTarget) { removal in
-            RemoveWorktreeSheet(removal: removal)
-        }
-        .sheet(item: $lockPrompt) { worktree in
-            LockWorktreeSheet(worktree: worktree)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .newWorktree:
+                NewWorktreeSheet(preselectedBranch: preselectedBranchForSheet)
+            case .removeWorktree(let removal):
+                RemoveWorktreeSheet(removal: removal)
+            case .lockWorktree(let worktree):
+                LockWorktreeSheet(worktree: worktree)
+            }
         }
         .alert(
             service.lastError?.title ?? "Git Error",
@@ -100,7 +99,7 @@ struct MainView: View {
         }
         .onChange(of: commands.newWorktreeRequested) { _, requested in
             if requested {
-                if service.repository != nil { showingNewWorktreeSheet = true }
+                if service.repository != nil { activeSheet = .newWorktree }
                 commands.newWorktreeRequested = false
             }
         }
@@ -127,13 +126,13 @@ struct MainView: View {
             WorktreeDetailView(
                 worktree: worktree,
                 onRequestRemoval: { requestRemoval(of: $0) },
-                onRequestLock: { lockPrompt = $0 }
+                onRequestLock: { activeSheet = .lockWorktree($0) }
             )
         } else if case .branch(let ref) = selection,
                   let branch = service.branches.first(where: { $0.refName == ref }) {
             InactiveBranchView(
                 branch: branch,
-                onCreateWorktree: { showingNewWorktreeSheet = true }
+                onCreateWorktree: { activeSheet = .newWorktree }
             )
         } else {
             ContentUnavailableView(
@@ -173,7 +172,7 @@ struct MainView: View {
             .disabled(service.repository == nil)
 
             Button {
-                showingNewWorktreeSheet = true
+                activeSheet = .newWorktree
             } label: {
                 Label("New Worktree", systemImage: "plus.rectangle.on.rectangle")
             }
@@ -230,7 +229,7 @@ struct MainView: View {
     private func requestRemoval(of worktree: Worktree) {
         Task {
             let blocking = await service.changesBlockingRemoval(of: worktree)
-            removalTarget = WorktreeRemoval(worktree: worktree, blockingChanges: blocking)
+            activeSheet = .removeWorktree(WorktreeRemoval(worktree: worktree, blockingChanges: blocking))
         }
     }
 
@@ -245,6 +244,24 @@ struct MainView: View {
     private func errorBody(_ error: PresentableError) -> String {
         guard let detail = error.detail, !detail.isEmpty else { return error.message }
         return "\(error.message)\n\n\(detail)"
+    }
+}
+
+/// The one modal the window can be showing.
+///
+/// SwiftUI presents only one of several `.sheet` modifiers attached to the same view,
+/// so every modal goes through a single presenter rather than one modifier each.
+enum ActiveSheet: Identifiable {
+    case newWorktree
+    case removeWorktree(WorktreeRemoval)
+    case lockWorktree(Worktree)
+
+    var id: String {
+        switch self {
+        case .newWorktree: "new-worktree"
+        case .removeWorktree(let removal): "remove-\(removal.id)"
+        case .lockWorktree(let worktree): "lock-\(worktree.id)"
+        }
     }
 }
 

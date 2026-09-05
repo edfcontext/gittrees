@@ -26,6 +26,16 @@ struct PreferencesView: View {
                             .textFieldStyle(.roundedBorder)
                             .font(GitTreesUI.monospaced)
                         Button("Choose…") { choosingGitExecutable = true }
+                            .fileImporter(
+                                isPresented: $choosingGitExecutable,
+                                allowedContentTypes: [.unixExecutable, .executable],
+                                allowsMultipleSelection: false
+                            ) { result in
+                                guard case .success(let urls) = result,
+                                      let url = urls.first else { return }
+                                preferences.gitExecutablePath = url.path
+                                service.rebuildClientIfNeeded()
+                            }
                     }
                 }
                 if gitExecutableIsValid {
@@ -80,6 +90,18 @@ struct PreferencesView: View {
                                 .font(GitTreesUI.monospaced)
                                 .onSubmit { applyWorktreeRoot(repository) }
                             Button("Choose…") { choosingWorktreeRoot = true }
+                                .fileImporter(
+                                    isPresented: $choosingWorktreeRoot,
+                                    allowedContentTypes: [.folder],
+                                    allowsMultipleSelection: false
+                                ) { result in
+                                    guard case .success(let urls) = result,
+                                          let url = urls.first,
+                                          let repository = service.repository else { return }
+                                    preferences.setWorktreeRoot(url, for: repository)
+                                    worktreeRootDraft = (url.path as NSString)
+                                        .abbreviatingWithTildeInPath
+                                }
                             Button("Apply") { applyWorktreeRoot(repository) }
                         }
                     }
@@ -123,25 +145,6 @@ struct PreferencesView: View {
         }
         .onChange(of: service.identity) { _, _ in syncIdentityDraft() }
         .onChange(of: preferences.gitExecutablePath) { _, _ in service.rebuildClientIfNeeded() }
-        .fileImporter(
-            isPresented: $choosingWorktreeRoot,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case .success(let urls) = result, let url = urls.first,
-                  let repository = service.repository else { return }
-            preferences.setWorktreeRoot(url, for: repository)
-            worktreeRootDraft = (url.path as NSString).abbreviatingWithTildeInPath
-        }
-        .fileImporter(
-            isPresented: $choosingGitExecutable,
-            allowedContentTypes: [.unixExecutable, .executable],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            preferences.gitExecutablePath = url.path
-            service.rebuildClientIfNeeded()
-        }
     }
 
     // MARK: - Commit identity
