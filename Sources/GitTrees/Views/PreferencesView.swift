@@ -9,6 +9,8 @@ struct PreferencesView: View {
     @Environment(WorkspaceLauncher.self) private var launcher
 
     @State private var worktreeRootDraft = ""
+    @State private var nameDraft = ""
+    @State private var emailDraft = ""
     @State private var choosingWorktreeRoot = false
     @State private var choosingGitExecutable = false
 
@@ -17,15 +19,34 @@ struct PreferencesView: View {
 
         Form {
             Section("Git") {
-                HStack(spacing: 6) {
-                    TextField("Git executable", text: $preferences.gitExecutablePath)
-                        .textFieldStyle(.roundedBorder)
-                        .font(GitTreesUI.monospaced)
-                    Button("Choose…") { choosingGitExecutable = true }
+                LabelledFieldRow(label: "Git executable") {
+                    HStack(spacing: 6) {
+                        TextField("", text: $preferences.gitExecutablePath)
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .font(GitTreesUI.monospaced)
+                        Button("Choose…") { choosingGitExecutable = true }
+                    }
                 }
-                Text("Commands run this binary directly with an argument array. No shell is involved.")
+                if gitExecutableIsValid {
+                    Text("Commands run this binary directly with an argument array. No shell is involved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    // Without this, a bad path only shows up as every later Git
+                    // operation failing, one error at a time.
+                    Label(
+                        "No executable at this path. Git operations will fail until it is corrected.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.orange)
+
+                    Button("Reset to \(GitProcessRunner.defaultExecutablePath)") {
+                        preferences.gitExecutablePath = GitProcessRunner.defaultExecutablePath
+                        service.rebuildClientIfNeeded()
+                    }
+                }
 
                 Stepper(
                     "Diff context: \(preferences.diffContextLines) lines",
@@ -51,13 +72,16 @@ struct PreferencesView: View {
                             .font(GitTreesUI.monospaced)
                     }
 
-                    HStack(spacing: 6) {
-                        TextField("Worktree root", text: $worktreeRootDraft)
-                            .textFieldStyle(.roundedBorder)
-                            .font(GitTreesUI.monospaced)
-                            .onSubmit { applyWorktreeRoot(repository) }
-                        Button("Choose…") { choosingWorktreeRoot = true }
-                        Button("Apply") { applyWorktreeRoot(repository) }
+                    LabelledFieldRow(label: "Worktree root") {
+                        HStack(spacing: 6) {
+                            TextField("", text: $worktreeRootDraft)
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .font(GitTreesUI.monospaced)
+                                .onSubmit { applyWorktreeRoot(repository) }
+                            Button("Choose…") { choosingWorktreeRoot = true }
+                            Button("Apply") { applyWorktreeRoot(repository) }
+                        }
                     }
 
                     Text("New worktrees are suggested inside this directory, named after the branch with prefixes such as feature/ removed.")
@@ -77,15 +101,27 @@ struct PreferencesView: View {
                 }
             }
 
+            if service.repository != nil {
+                identitySection
+                remoteSection
+            }
+
             Section("Display") {
                 Toggle("Show remote branches in the sidebar", isOn: $preferences.showRemoteBranches)
                 Toggle("Reopen the last repository at launch", isOn: $preferences.restoreLastRepository)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 480)
-        .onAppear(perform: syncDraft)
-        .onChange(of: service.repository) { _, _ in syncDraft() }
+        .frame(width: 560, height: 620)
+        .onAppear {
+            syncDraft()
+            syncIdentityDraft()
+        }
+        .onChange(of: service.repository) { _, _ in
+            syncDraft()
+            syncIdentityDraft()
+        }
+        .onChange(of: service.identity) { _, _ in syncIdentityDraft() }
         .onChange(of: preferences.gitExecutablePath) { _, _ in service.rebuildClientIfNeeded() }
         .fileImporter(
             isPresented: $choosingWorktreeRoot,
@@ -106,6 +142,111 @@ struct PreferencesView: View {
             preferences.gitExecutablePath = url.path
             service.rebuildClientIfNeeded()
         }
+    }
+
+    // MARK: - Commit identity
+
+    /// Reads and writes `git config --local user.name` / `user.email`.
+    ///
+    /// `--local` config lives in the shared git directory, so this is a property of the
+    /// repository rather than of one worktree — the label says so, because with several
+    /// worktrees open that distinction is easy to get wrong.
+    private var identitySection: some View {
+        Section("Commit Identity") {
+            LabeledContent("Currently") {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(service.identity.displayName ?? "Not configured")
+                        .font(GitTreesUI.monospaced)
+                        .foregroundStyle(service.identity.isComplete ? .primary : .secondary)
+                    Text(service.identity.scopeDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            LabelledFieldRow(label: "Name") {
+                TextField("", text: $nameDraft, prompt: Text("Dev"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+            }
+            LabelledFieldRow(label: "Email") {
+                TextField("", text: $emailDraft, prompt: Text("dev@example.com"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack(spacing: 8) {
+                Button("Set for This Repository") { applyIdentity() }
+                    .disabled(!identityDraftIsUsable)
+
+                if service.identity.isPinnedToRepository {
+                    Button("Use Global Identity") {
+                        Task {
+                            await service.setLocalIdentity(name: nil, email: nil)
+                            syncIdentityDraft()
+                        }
+                    }
+                }
+            }
+
+            Text("Writes git config --local, which applies to every worktree of this repository. Your global ~/.gitconfig is never modified.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Both fields must be present: Git needs a name and an email to author a commit.
+    private var identityDraftIsUsable: Bool {
+        !nameDraft.trimmingCharacters(in: .whitespaces).isEmpty
+            && !emailDraft.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func applyIdentity() {
+        Task {
+            await service.setLocalIdentity(
+                name: nameDraft.trimmingCharacters(in: .whitespaces),
+                email: emailDraft.trimmingCharacters(in: .whitespaces)
+            )
+            syncIdentityDraft()
+        }
+    }
+
+    // MARK: - Remote
+
+    private var remoteSection: some View {
+        Section("Remote") {
+            Picker("Fetch, pull and push use", selection: Binding(
+                get: { service.selectedRemote },
+                set: { service.selectedRemote = $0 }
+            )) {
+                Text("Automatic").tag(String?.none)
+                ForEach(service.remotes) { remote in
+                    Text(remote.name).tag(String?.some(remote.name))
+                }
+            }
+            .disabled(service.remotes.isEmpty)
+
+            if service.remotes.isEmpty {
+                Text("This repository has no remotes configured.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Automatic fetches every remote and lets pull and push follow each branch's own tracking configuration. Choosing a remote names it explicitly, and is the remote a new branch is published to.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func syncIdentityDraft() {
+        // Seed the fields with whatever Git resolves, so editing starts from the truth
+        // rather than from an empty box.
+        nameDraft = service.identity.name ?? ""
+        emailDraft = service.identity.email ?? ""
+    }
+
+    private var gitExecutableIsValid: Bool {
+        FileManager.default.isExecutableFile(atPath: preferences.gitExecutablePath)
     }
 
     private func syncDraft() {

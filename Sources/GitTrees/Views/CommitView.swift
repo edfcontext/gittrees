@@ -44,6 +44,19 @@ struct CommitView: View {
                     Label("Resolve conflicts first", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
+                } else if !service.identity.isComplete {
+                    // Git would reject the commit; say so before the user writes a message.
+                    Label("No commit identity set", systemImage: "person.crop.circle.badge.exclamationmark")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .help("Set user.name and user.email in Settings, or in your global Git configuration.")
+                } else if let identity = service.identity.displayName {
+                    Text("as \(identity)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(service.identity.scopeDescription)
                 }
 
                 Spacer(minLength: 0)
@@ -69,6 +82,7 @@ struct CommitView: View {
         stagedCount > 0
             && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && service.status.conflicts.isEmpty
+            && service.identity.isComplete
             && service.activeOperation == nil
     }
 

@@ -18,6 +18,7 @@ public final class PreferencesService {
         static let worktreeRoots = "worktreeRoots"
         static let diffContextLines = "diffContextLines"
         static let showRemoteBranches = "showRemoteBranches"
+        static let preferredRemotes = "preferredRemotes"
     }
 
     /// The number of recently opened repositories kept in the Open Recent menu.
@@ -37,6 +38,7 @@ public final class PreferencesService {
         self.showRemoteBranches = defaults.object(forKey: Key.showRemoteBranches) as? Bool ?? false
         self.recentRepositories = Self.decode([RecentRepository].self, from: defaults, key: Key.recentRepositories) ?? []
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
+        self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
         self.lastRepositoryPath = defaults.string(forKey: Key.lastRepositoryPath)
     }
 
@@ -74,6 +76,10 @@ public final class PreferencesService {
 
     private var worktreeRoots: [String: String] {
         didSet { defaults.set(worktreeRoots, forKey: Key.worktreeRoots) }
+    }
+
+    private var preferredRemotes: [String: String] {
+        didSet { defaults.set(preferredRemotes, forKey: Key.preferredRemotes) }
     }
 
     public private(set) var lastRepositoryPath: String? {
@@ -131,6 +137,24 @@ public final class PreferencesService {
 
     public func hasCustomWorktreeRoot(for repository: Repository) -> Bool {
         worktreeRoots[repository.id] != nil
+    }
+
+    // MARK: - Per-repository remote
+
+    /// The remote the user last chose for this repository, if any.
+    ///
+    /// Nil means "let Git decide" — fetch every remote, and let pull and push follow the
+    /// branch's own tracking configuration.
+    public func preferredRemote(for repository: Repository) -> String? {
+        preferredRemotes[repository.id]
+    }
+
+    public func setPreferredRemote(_ remote: String?, for repository: Repository) {
+        if let remote, !remote.isEmpty {
+            preferredRemotes[repository.id] = remote
+        } else {
+            preferredRemotes.removeValue(forKey: repository.id)
+        }
     }
 
     // MARK: - Codable storage

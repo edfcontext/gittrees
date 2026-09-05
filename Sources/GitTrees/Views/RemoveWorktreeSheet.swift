@@ -146,6 +146,7 @@ struct LockWorktreeSheet: View {
 
             TextField("Reason (optional)", text: $reason)
                 .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
 
             HStack {
                 Spacer()

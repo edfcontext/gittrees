@@ -23,6 +23,22 @@ public final class GitProcessRunner: GitRunning {
             throw GitError.executableNotFound(path: executableURL.path)
         }
 
+        // `Process.run()` raises an Objective-C exception — which cannot be caught from
+        // Swift — when the current directory does not exist. A worktree can be deleted
+        // from under the application at any moment, so this is checked rather than risked.
+        if let directory = command.workingDirectory {
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
+            guard exists, isDirectory.boolValue else {
+                throw GitError.launchFailed(
+                    arguments: command.fullArguments,
+                    reason: exists
+                        ? "\(directory.path) is not a directory"
+                        : "the directory \(directory.path) no longer exists"
+                )
+            }
+        }
+
         let arguments = command.fullArguments
         let result = try await Self.execute(
             executable: executableURL,

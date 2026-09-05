@@ -110,6 +110,26 @@ struct TrackingBadge: View {
     }
 }
 
+/// A labelled text-entry row for a grouped `Form`.
+///
+/// A plain `TextField` with a title lets the form hoist the label into its own column
+/// and right-align the value, which reads badly for paths, branch names and email
+/// addresses — and `multilineTextAlignment` does not override it. Putting the label
+/// above a label-less field keeps the value left-justified and gives it the full width.
+struct LabelledFieldRow<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.callout)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 extension View {
     /// Standard bordered container used for lists and the diff pane.
     func panelChrome(cornerRadius: CGFloat = 6) -> some View {

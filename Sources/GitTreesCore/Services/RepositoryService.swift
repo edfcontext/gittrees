@@ -94,6 +94,10 @@ public final class RepositoryService {
     /// Dirty flag per worktree path, filled in by a background scan so the sidebar can
     /// show which worktrees have uncommitted work without blocking the first paint.
     public private(set) var dirtyStates: [String: Bool] = [:]
+    /// Remotes configured on the repository.
+    public private(set) var remotes: [Remote] = []
+    /// The commit identity a commit in the selected worktree would use.
+    public private(set) var identity: GitIdentity = .unknown
 
     /// Path of the selected worktree. Paths, not indices, so a refresh cannot
     /// silently move the selection to a different worktree.
@@ -104,6 +108,7 @@ public final class RepositoryService {
             history = []
             selectedFile = nil
             refreshSelectedWorktree()
+            Task { await refreshIdentity() }
         }
     }
 
@@ -115,6 +120,11 @@ public final class RepositoryService {
     public private(set) var isRefreshing = false
     public private(set) var activeOperation: ActiveOperation?
     public var lastError: PresentableError?
+    /// A directory the user opened that turned out not to be a repository.
+    ///
+    /// Held rather than reported as an error, because the useful next step is to offer
+    /// to create a repository there.
+    public private(set) var uninitializedDirectory: URL?
     /// Output of the last fetch/pull/push, shown in the operation banner.
     public private(set) var lastOperationOutput: String?
 
@@ -138,6 +148,39 @@ public final class RepositoryService {
     }
 
     // MARK: - Derived state
+
+    /// The remote fetch, pull and push act on.
+    ///
+    /// Nil means "let Git decide": fetch every remote, and let pull and push follow the
+    /// branch's own tracking configuration, which is Git's own default behaviour.
+    public var selectedRemote: String? {
+        get {
+            guard let repository else { return nil }
+            let stored = preferences.preferredRemote(for: repository)
+            // A remote that has since been removed must not keep being passed to Git.
+            guard let stored, remotes.contains(where: { $0.name == stored }) else { return nil }
+            return stored
+        }
+        set {
+            guard let repository else { return }
+            preferences.setPreferredRemote(newValue, for: repository)
+        }
+    }
+
+    /// The remote to publish a new branch to.
+    ///
+    /// Prefers an explicit choice, then the remote the branch already tracks, then
+    /// `origin`, then whatever single remote exists.
+    public var remoteForPublishing: String? {
+        if let selectedRemote { return selectedRemote }
+        if let worktree = selectedWorktree,
+           let upstream = branch(for: worktree)?.upstreamName,
+           let remote = remotes.first(where: { upstream.hasPrefix($0.name + "/") }) {
+            return remote.name
+        }
+        if remotes.contains(where: { $0.name == "origin" }) { return "origin" }
+        return remotes.first?.name
+    }
 
     public var selectedWorktree: Worktree? {
         guard let selectedWorktreePath else { return nil }
@@ -211,8 +254,31 @@ public final class RepositoryService {
             repository = nil
             worktrees = []
             branches = []
-            lastError = PresentableError(title: "Could Not Open Repository", error: error)
+            // "Not a repository" is an offer to make one, not a failure to report.
+            if case GitError.notARepository = error {
+                uninitializedDirectory = directory
+            } else {
+                lastError = PresentableError(title: "Could Not Open Repository", error: error)
+            }
         }
+    }
+
+    /// Creates a repository in `directory` with `git init`, then opens it.
+    public func initializeRepository(at directory: URL) async {
+        uninitializedDirectory = nil
+        let created = await withOperation(label: "Creating repository…") { [client] in
+            try await client.initializeRepository(at: directory)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Create Repository", error: error)
+        } thenReturning: { true }
+
+        guard created == true else { return }
+        await open(directory: directory)
+    }
+
+    /// Dismisses the offer to create a repository without creating one.
+    public func dismissInitializationPrompt() {
+        uninitializedDirectory = nil
     }
 
     public func closeRepository() {
@@ -224,6 +290,9 @@ public final class RepositoryService {
         selectedWorktreePath = nil
         selectedFile = nil
         dirtyStates = [:]
+        remotes = []
+        identity = .unknown
+        uninitializedDirectory = nil
     }
 
     // MARK: - Refresh
@@ -243,19 +312,23 @@ public final class RepositoryService {
         defer { isRefreshing = false }
 
         do {
-            // Worktrees and branches are independent reads; run them concurrently.
+            // These reads are independent; run them concurrently.
             async let worktreeList = client.worktrees(repository: repository.commandDirectory)
             async let branchList = client.branches(repository: repository.commandDirectory)
-            let (loadedWorktrees, loadedBranches) = try await (worktreeList, branchList)
+            async let remoteList = client.remotes(repository: repository.commandDirectory)
+            let (loadedWorktrees, loadedBranches, loadedRemotes) =
+                try await (worktreeList, branchList, remoteList)
 
             worktrees = loadedWorktrees
             branches = loadedBranches
+            remotes = loadedRemotes
 
             // Keep the selection valid across worktree removals.
             if let selectedWorktreePath, !worktrees.contains(where: { $0.id == selectedWorktreePath }) {
                 self.selectedWorktreePath = worktrees.first { !$0.isBare }?.id
             }
             scanDirtyStates()
+            await refreshIdentity()
         } catch is CancellationError {
             return
         } catch {
@@ -323,6 +396,41 @@ public final class RepositoryService {
             if showingStagedDiff && !updated.hasStagedChanges { showingStagedDiff = false }
         } else {
             self.selectedFile = nil
+        }
+    }
+
+    // MARK: - Commit identity
+
+    /// Reads the identity a commit would be authored with.
+    ///
+    /// Read in the selected worktree so the answer reflects the directory the commit
+    /// would actually run in.
+    public func refreshIdentity() async {
+        guard let repository else {
+            identity = .unknown
+            return
+        }
+        let directory = selectedWorktree.map(\.path) ?? repository.commandDirectory
+        identity = (try? await client.identity(directory: directory)) ?? .unknown
+    }
+
+    /// Pins the commit identity on the repository with `git config --local`.
+    ///
+    /// `--local` config lives in the shared git directory, so this applies to every
+    /// worktree of the repository. Passing nil for both fields clears the pin and lets
+    /// the user's global configuration show through again.
+    public func setLocalIdentity(name: String?, email: String?) async {
+        guard let repository else { return }
+        _ = await withOperation(label: "Updating identity…") { [client] in
+            try await client.setLocalIdentity(
+                repository: repository.commandDirectory,
+                name: name,
+                email: email
+            )
+        } onFailure: { error in
+            PresentableError(title: "Could Not Update Identity", error: error)
+        } thenReturning: { [weak self] in
+            await self?.refreshIdentity()
         }
     }
 
@@ -530,21 +638,37 @@ public final class RepositoryService {
 
     // MARK: - Remotes
 
+    /// Fetches the chosen remote, or every remote when none is chosen.
     public func fetch(prune: Bool = false) async {
-        await runRemoteOperation(label: "Fetching…", title: "Fetch Failed") { [client] worktree in
-            try await client.fetch(worktree: worktree.path, prune: prune)
+        let remote = selectedRemote
+        let label = remote.map { "Fetching \($0)…" } ?? "Fetching…"
+        await runRemoteOperation(label: label, title: "Fetch Failed") { [client] worktree in
+            try await client.fetch(worktree: worktree.path, remote: remote, prune: prune)
         }
     }
 
     public func pull() async {
+        let remote = selectedRemote
         await runRemoteOperation(label: "Pulling…", title: "Pull Failed") { [client] worktree in
-            try await client.pull(worktree: worktree.path)
+            try await client.pull(worktree: worktree.path, remote: remote)
         }
     }
 
+    /// Pushes, publishing the branch when it has no upstream yet.
     public func push(setUpstream: Bool = false) async {
+        // Publishing needs a named remote; an ordinary push can fall back to Git's own
+        // tracking configuration.
+        let remote = setUpstream ? remoteForPublishing : selectedRemote
+        if setUpstream && remote == nil {
+            lastError = PresentableError(
+                title: "Push Failed",
+                message: "This branch has no upstream and the repository has no remotes to publish it to.",
+                detail: "Add a remote with git remote add, then push again."
+            )
+            return
+        }
         await runRemoteOperation(label: "Pushing…", title: "Push Failed") { [client] worktree in
-            try await client.push(worktree: worktree.path, setUpstream: setUpstream)
+            try await client.push(worktree: worktree.path, remote: remote, setUpstream: setUpstream)
         }
     }
 

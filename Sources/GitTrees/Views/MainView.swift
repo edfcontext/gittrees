@@ -36,6 +36,24 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 420)
         } detail: {
             detail
+                // Opening a folder that is not a repository offers to create one there.
+                // This alert is attached here rather than alongside the error alert
+                // above: two alerts on a single view do not both present.
+                .alert(
+                    "Not a Git Repository",
+                    isPresented: Binding(
+                        get: { service.uninitializedDirectory != nil },
+                        set: { if !$0 { service.dismissInitializationPrompt() } }
+                    ),
+                    presenting: service.uninitializedDirectory
+                ) { directory in
+                    Button("Create Repository") {
+                        Task { await service.initializeRepository(at: directory) }
+                    }
+                    Button("Cancel", role: .cancel) { service.dismissInitializationPrompt() }
+                } message: { directory in
+                    Text("\(RepositorySidebar.abbreviate(directory)) is not inside a Git repository.\n\nRun git init here to create one? Nothing already in the folder is changed.")
+                }
         }
         .navigationTitle(service.repository?.name ?? "GitTrees")
         .toolbar { toolbarContent }
@@ -245,7 +263,7 @@ private struct NoRepositoryView: View {
         ContentUnavailableView {
             Label("No Repository Open", systemImage: "point.3.filled.connected.trianglepath.dotted")
         } description: {
-            Text("Open a Git repository, or any of its worktrees, to get started.")
+            Text("Open a Git repository, or any of its worktrees, to get started. Choosing a folder that is not yet a repository offers to create one there.")
         } actions: {
             Button("Open Repository…", action: onOpen)
         }

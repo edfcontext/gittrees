@@ -12,7 +12,6 @@ APP_DIR="$ROOT_DIR/.build/GitTrees.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-ICON_SOURCE="$ROOT_DIR/Resources/AppIcon.png"
 ICONSET_DIR="$ROOT_DIR/.build/AppIcon.iconset"
 
 cd "$ROOT_DIR"
@@ -24,7 +23,17 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/GitTrees"
 
-if [[ -f "$ICON_SOURCE" ]]; then
+# Icon artwork, most specific first. A square PNG of at least 512x512 works best;
+# the macOS squircle and its margin should already be part of the artwork.
+ICON_SOURCE=""
+for candidate in "$ROOT_DIR/Resources/AppIcon.png" "$ROOT_DIR/image.png"; do
+    if [[ -f "$candidate" ]]; then
+        ICON_SOURCE="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$ICON_SOURCE" ]]; then
     rm -rf "$ICONSET_DIR"
     mkdir -p "$ICONSET_DIR"
     for size in 16 32 128 256 512; do

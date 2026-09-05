@@ -43,8 +43,10 @@ behave exactly as they do on the command line.
 ## Features
 
 - **Repositories** — open any directory inside a repository with a native panel
-  (⌘O); a linked worktree resolves to the repository it belongs to. Recents are
-  remembered and the last repository is reopened at launch.
+  (⌘O); a linked worktree resolves to the repository it belongs to. Choosing a folder
+  that is not yet a repository offers to `git init` it in place, leaving anything
+  already there untouched. Recents are remembered and the last repository is reopened
+  at launch.
 - **Worktrees** — path, branch, HEAD, detached, locked and prunable state. Create from
   an existing branch or with a new branch (`git worktree add -b`), lock/unlock, prune
   stale metadata, and remove.
@@ -54,8 +56,11 @@ behave exactly as they do on the command line.
   with no worktree offers *Create Worktree* or *Checkout in Current Worktree*.
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
   unified diff (working tree or index), and a commit editor.
-- **Remotes** — fetch, pull and push, with `--set-upstream` offered for a branch that
-  has never been pushed. Git's stdout and stderr are shown verbatim.
+- **Remotes** — fetch, pull and push against a chosen remote, with `--set-upstream`
+  offered for a branch that has never been pushed. Git's stdout and stderr are shown
+  verbatim.
+- **Commit identity** — shows who a commit would be authored as and where that came
+  from, and can pin an identity on the repository. See below.
 - **Workspace** — open a worktree in Finder, Terminal, IntelliJ IDEA, VS Code or Cursor
   via `NSWorkspace`; the preferred IDE is stored in Settings.
 
@@ -64,6 +69,34 @@ behave exactly as they do on the command line.
 A worktree with local changes is never removed by default. GitTrees runs `git status`
 first and, if anything would be lost, shows what it found and requires an explicit
 opt-in before passing `--force`.
+
+### Choosing a remote
+
+A picker appears beside Fetch/Pull/Push once a repository has more than one remote, and
+the choice is remembered per repository.
+
+- **Automatic** (the default) is Git's own behaviour: `git fetch --all`, and bare
+  `git pull` / `git push` that follow each branch's tracking configuration.
+- **Naming a remote** passes it explicitly — `git fetch <remote>`, `git pull <remote>`,
+  `git push <remote>` — and is the remote a new branch is published to.
+
+Publishing a branch resolves its remote in order: the explicit choice, then the remote
+the branch already tracks, then `origin`, then the only remote there is. If a repository
+has no remotes at all, publishing is refused with an explanation rather than failing
+against a remote that does not exist.
+
+### Commit identity
+
+The commit bar shows the identity a commit would carry (`as Dev <dev@example.com>`), and
+Commit is disabled with a warning when `user.name` or `user.email` is missing — rather
+than letting Git reject the commit after the message has been written. Branch Info also
+reports whether the identity is set on the repository or inherited from your global
+configuration.
+
+Settings can pin an identity with `git config --local`. That config lives in the shared
+git directory, so it applies to **every worktree of the repository** — the UI says so,
+because with several worktrees open that is easy to get wrong. Your global
+`~/.gitconfig` is never modified, and *Use Global Identity* clears the pin.
 
 ### New worktree paths
 
@@ -104,6 +137,8 @@ bundle with an `Info.plist` for a Dock icon, menu bar and open panels):
 ```
 
 The bundle is written to `.build/GitTrees.app`. Pass `debug` to bundle a debug build.
+The icon is taken from `Resources/AppIcon.png` if present, otherwise `image.png` in the
+project root, and converted to an `.icns` with `sips` and `iconutil`.
 
 ## Layout
 
@@ -133,9 +168,12 @@ Two layers:
   linked worktrees, detached/locked/prunable state, paths with spaces, non-ASCII branch
   names, and modified/staged/untracked/renamed/deleted/conflicted status entries.
 - **Integration suite** drives the real `git` binary in throwaway repositories, which is
-  the only way to prove the argument vectors are ones Git accepts: worktree lifecycle,
+  the only way to prove the argument vectors are ones Git accepts: `git init` on a
+  folder with existing content, worktree lifecycle,
   branch-already-checked-out refusal, pruning, staging on an unborn HEAD, diffs, commits,
-  hook enforcement, merge conflicts and the dirty-removal guard.
+  hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
+  linked worktrees, and publishing a branch to a remote that is deliberately not called
+  `origin`.
 
 ## Notes
 
@@ -144,3 +182,6 @@ Two layers:
   on a prompt that has no terminal to appear on.
 - Concurrency: Git runs off the main actor; all UI state is main-actor isolated. A
   destructive operation claims its worktree first, so two cannot overlap on one path.
+- A working directory that has vanished is rejected before `Process.run()`, which
+  otherwise raises an Objective-C exception that Swift cannot catch — the case a worktree
+  deleted from under the application would hit.

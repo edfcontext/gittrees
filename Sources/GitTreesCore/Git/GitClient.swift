@@ -52,6 +52,17 @@ public final class GitClient: Sendable {
         )
     }
 
+    /// Runs `git init` in an existing directory.
+    ///
+    /// The initial branch name is deliberately not forced: Git takes it from the user's
+    /// `init.defaultBranch` configuration, exactly as `git init` on the command line
+    /// would. Re-running it on an existing repository is safe — Git reinitialises rather
+    /// than discarding anything — but callers should only reach here after
+    /// `discoverRepository` has said the directory is not in a repository.
+    public func initializeRepository(at directory: URL) async throws {
+        _ = try await run(["init"], in: directory)
+    }
+
     // MARK: - Worktrees
 
     public func worktrees(repository: URL) async throws -> [Worktree] {
@@ -172,6 +183,61 @@ public final class GitClient: Sendable {
         _ = try await run(["checkout", branch], in: worktree)
     }
 
+    // MARK: - Identity
+
+    /// Reads both the resolved and the repository-local commit identity.
+    ///
+    /// `git config --get` exits 1 when a key is unset, which is a normal answer here
+    /// rather than a failure.
+    public func identity(directory: URL) async throws -> GitIdentity {
+        async let name = configValue(["--get", "user.name"], in: directory)
+        async let email = configValue(["--get", "user.email"], in: directory)
+        async let localName = configValue(["--local", "--get", "user.name"], in: directory)
+        async let localEmail = configValue(["--local", "--get", "user.email"], in: directory)
+
+        return try await GitIdentity(
+            name: name,
+            email: email,
+            localName: localName,
+            localEmail: localEmail
+        )
+    }
+
+    /// Pins the identity on the repository with `git config --local`.
+    ///
+    /// `--local` config lives in the shared git directory, so this applies to every
+    /// worktree of the repository. Passing nil for a field unsets it, letting the
+    /// global configuration show through again.
+    public func setLocalIdentity(repository: URL, name: String?, email: String?) async throws {
+        try await setLocalConfig(key: "user.name", value: name, in: repository)
+        try await setLocalConfig(key: "user.email", value: email, in: repository)
+    }
+
+    private func setLocalConfig(key: String, value: String?, in directory: URL) async throws {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            _ = try await run(["config", "--local", key, trimmed], in: directory)
+        } else {
+            // `--unset` exits 5 when the key was not set, which is the desired end state.
+            _ = try await run(
+                ["config", "--local", "--unset", key],
+                in: directory,
+                acceptableExitCodes: [0, 5]
+            )
+        }
+    }
+
+    private func configValue(_ arguments: [String], in directory: URL) async throws -> String? {
+        let result = try await run(
+            ["config"] + arguments,
+            in: directory,
+            acceptableExitCodes: [0, 1]
+        )
+        guard result.exitCode == 0 else { return nil }
+        let value = result.trimmedStdout
+        return value.isEmpty ? nil : value
+    }
+
     // MARK: - Status
 
     /// Spec-shaped accessor returning only the changed paths.
@@ -269,6 +335,7 @@ public final class GitClient: Sendable {
 
     // MARK: - Remotes
 
+    /// Fetches one remote, or every remote when `remote` is nil.
     public func fetch(worktree: URL, remote: String? = nil, prune: Bool = false) async throws -> String {
         var arguments = ["fetch"]
         if prune { arguments.append("--prune") }
@@ -277,16 +344,27 @@ public final class GitClient: Sendable {
         return result.stdoutText + result.stderrText
     }
 
-    public func pull(worktree: URL) async throws -> String {
-        let result = try await run(["pull"], in: worktree)
+    /// Pulls. With no remote, Git uses the branch's own tracking configuration.
+    public func pull(worktree: URL, remote: String? = nil) async throws -> String {
+        var arguments = ["pull"]
+        if let remote, !remote.isEmpty { arguments.append(remote) }
+        let result = try await run(arguments, in: worktree)
         return result.stdoutText + result.stderrText
     }
 
-    /// Pushes the current branch. `setUpstream` adds `--set-upstream origin <branch>`
-    /// for a branch that has never been pushed.
-    public func push(worktree: URL, setUpstream: Bool = false, remote: String = "origin") async throws -> String {
+    /// Pushes the current branch.
+    ///
+    /// `setUpstream` adds `--set-upstream <remote> <branch>` for a branch that has never
+    /// been pushed, which requires knowing which remote to publish to.
+    public func push(worktree: URL, remote: String? = nil, setUpstream: Bool = false) async throws -> String {
         var arguments = ["push"]
         if setUpstream {
+            guard let remote, !remote.isEmpty else {
+                throw GitError.unexpectedOutput(
+                    reason: "publishing a branch needs a remote to push it to",
+                    arguments: arguments
+                )
+            }
             guard let branch = try await currentBranch(worktree: worktree) else {
                 throw GitError.unexpectedOutput(
                     reason: "cannot set an upstream for a detached HEAD",
@@ -294,17 +372,44 @@ public final class GitClient: Sendable {
                 )
             }
             arguments.append(contentsOf: ["--set-upstream", remote, branch])
+        } else if let remote, !remote.isEmpty {
+            arguments.append(remote)
         }
         let result = try await run(arguments, in: worktree)
         return result.stdoutText + result.stderrText
     }
 
-    public func remotes(repository: URL) async throws -> [String] {
+    /// Configured remote names, in Git's order.
+    public func remoteNames(repository: URL) async throws -> [String] {
         let result = try await run(["remote"], in: repository)
         return result.stdoutText
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Remotes with their fetch URLs, for display in Branch Info and the remote picker.
+    public func remotes(repository: URL) async throws -> [Remote] {
+        let names = try await remoteNames(repository: repository)
+        guard !names.isEmpty else { return [] }
+
+        return try await withThrowingTaskGroup(of: (Int, Remote).self) { group in
+            for (index, name) in names.enumerated() {
+                group.addTask { [self] in
+                    // A remote can exist with no URL configured; that is not an error.
+                    let result = try await run(
+                        ["remote", "get-url", name],
+                        in: repository,
+                        acceptableExitCodes: [0, 2, 128]
+                    )
+                    let url = result.exitCode == 0 ? result.trimmedStdout : ""
+                    return (index, Remote(name: name, fetchURL: url.isEmpty ? nil : url))
+                }
+            }
+            var collected: [(Int, Remote)] = []
+            for try await entry in group { collected.append(entry) }
+            return collected.sorted { $0.0 < $1.0 }.map(\.1)
+        }
     }
 
     // MARK: - History

@@ -109,8 +109,11 @@ struct NewWorktreeSheet: View {
                 }
 
             case .new:
-                TextField("Branch name", text: $newBranchName, prompt: Text("feature/zpl-templates"))
-                    .textFieldStyle(.roundedBorder)
+                LabelledFieldRow(label: "Branch name") {
+                    TextField("", text: $newBranchName, prompt: Text("feature/zpl-templates"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                }
 
                 if let conflict = branchNameConflict {
                     Label(conflict, systemImage: "exclamationmark.triangle")
@@ -133,13 +136,16 @@ struct NewWorktreeSheet: View {
 
     private var locationSection: some View {
         Section("Location") {
-            HStack(spacing: 6) {
-                TextField("Path", text: $location)
-                    .textFieldStyle(.roundedBorder)
-                    .font(GitTreesUI.monospaced)
-                    .onChange(of: location) { _, _ in locationEdited = true }
+            LabelledFieldRow(label: "Path") {
+                HStack(spacing: 6) {
+                    TextField("", text: $location)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .font(GitTreesUI.monospaced)
+                        .onChange(of: location) { _, _ in locationEdited = true }
 
-                Button("Choose…") { choosingLocation = true }
+                    Button("Choose…") { choosingLocation = true }
+                }
             }
 
             if let repository = service.repository {

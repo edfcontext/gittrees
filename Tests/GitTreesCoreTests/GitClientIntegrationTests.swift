@@ -112,6 +112,84 @@ struct GitClientIntegrationTests {
         }
     }
 
+    // MARK: - Initialising a repository
+
+    @Test("an uninitialized folder can be turned into a repository and then opened")
+    func initializeUninitializedFolder() async throws {
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-init-\(UUID().uuidString)", isDirectory: true)
+        // A space in the name, and existing content that must survive `git init`.
+        let workspace = folder.appendingPathComponent("new workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let existing = workspace.appendingPathComponent("notes.txt")
+        try "already here\n".write(to: existing, atomically: true, encoding: .utf8)
+
+        let client = GitClient()
+
+        // Precondition: this is the state the UI offers to fix.
+        await #expect(throws: GitError.self) {
+            try await client.discoverRepository(at: workspace)
+        }
+
+        try await client.initializeRepository(at: workspace)
+
+        let repository = try await client.discoverRepository(at: workspace)
+        #expect(repository.mainWorktreePath.standardizedFileURL == workspace.standardizedFileURL)
+        #expect(repository.name == "new workspace")
+        #expect(!repository.isBare)
+
+        // Exactly one worktree, and it is the main one.
+        let worktrees = try await client.worktrees(repository: workspace)
+        #expect(worktrees.count == 1)
+        #expect(worktrees[0].isMain)
+
+        // Nothing on disk was disturbed; the existing file is simply untracked now.
+        #expect(FileManager.default.fileExists(atPath: existing.path))
+        let status = try await client.statusSummary(worktree: workspace)
+        #expect(status.changes.contains { $0.kind == .untracked && $0.path == "notes.txt" })
+
+        // A brand new repository has an unborn HEAD and no history.
+        #expect(try await client.hasCommits(worktree: workspace) == false)
+        #expect(try await client.log(worktree: workspace).isEmpty)
+    }
+
+    @Test("a working directory that does not exist is reported rather than crashing")
+    func missingWorkingDirectoryIsReported() async throws {
+        // Process.run() raises an uncatchable Objective-C exception for a missing
+        // current directory, so the runner has to reject it first. This is the case a
+        // worktree deleted from under the application hits.
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-gone-\(UUID().uuidString)", isDirectory: true)
+
+        do {
+            try await GitClient().initializeRepository(at: missing)
+            Issue.record("initializing a missing directory should have failed")
+        } catch let error as GitError {
+            guard case .launchFailed(_, let reason) = error else {
+                Issue.record("expected launchFailed, got \(error)")
+                return
+            }
+            #expect(reason.contains("no longer exists"))
+        }
+    }
+
+    @Test("a working directory that is a file, not a directory, is also rejected")
+    func fileAsWorkingDirectoryIsReported() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-file-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = directory.appendingPathComponent("notes.txt")
+        try "x\n".write(to: file, atomically: true, encoding: .utf8)
+
+        await #expect(throws: GitError.self) {
+            try await GitClient().initializeRepository(at: file)
+        }
+    }
+
     // MARK: - Worktrees
 
     @Test("creating, locking, unlocking and removing a worktree round-trips")
@@ -255,6 +333,133 @@ struct GitClientIntegrationTests {
         let develop = try #require(branches.first { $0.name == "develop" })
         #expect(develop.worktreePath == nil)
         #expect(!develop.hasUpstream)
+    }
+
+    // MARK: - Identity
+
+    @Test("the local commit identity can be read, changed and cleared")
+    func localIdentityRoundTrip() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        // The fixture sets both with `git config`, i.e. --local.
+        var identity = try await client.identity(directory: fixture.repository)
+        #expect(identity.name == "GitTrees Tests")
+        #expect(identity.email == "tests@example.com")
+        #expect(identity.localName == "GitTrees Tests")
+        #expect(identity.scope == .repository)
+        #expect(identity.displayName == "GitTrees Tests <tests@example.com>")
+
+        try await client.setLocalIdentity(
+            repository: fixture.repository,
+            name: "Other Dev",
+            email: "other@example.com"
+        )
+        identity = try await client.identity(directory: fixture.repository)
+        #expect(identity.name == "Other Dev")
+        #expect(identity.email == "other@example.com")
+
+        // Clearing must succeed even though `git config --unset` exits 5 for a key that
+        // is already absent.
+        try await client.setLocalIdentity(repository: fixture.repository, name: nil, email: nil)
+        identity = try await client.identity(directory: fixture.repository)
+        #expect(identity.localName == nil)
+        #expect(identity.localEmail == nil)
+        try await client.setLocalIdentity(repository: fixture.repository, name: nil, email: nil)
+    }
+
+    @Test("a local identity set on the repository is visible from a linked worktree")
+    func identityIsSharedAcrossWorktrees() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+        let linked = fixture.worktreeRoot("linked")
+
+        try await client.createWorktree(
+            repository: fixture.repository,
+            path: linked,
+            newBranch: "feature/linked",
+            startingAt: "main"
+        )
+        try await client.setLocalIdentity(
+            repository: fixture.repository,
+            name: "Shared Dev",
+            email: "shared@example.com"
+        )
+
+        // --local config lives in the common git dir, which is what makes this a
+        // repository-wide setting rather than a per-worktree one.
+        let identity = try await client.identity(directory: linked)
+        #expect(identity.name == "Shared Dev")
+        #expect(identity.localEmail == "shared@example.com")
+        #expect(identity.scope == .repository)
+    }
+
+    // MARK: - Remotes
+
+    @Test("remotes are listed with their fetch URLs, in Git's order")
+    func remoteListing() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        #expect(try await fixture.client.remotes(repository: fixture.repository).isEmpty)
+
+        try await fixture.git(["remote", "add", "origin", "https://example.com/summit.git"])
+        try await fixture.git(["remote", "add", "gitea", "https://git.internal/summit.git"])
+
+        let remotes = try await fixture.client.remotes(repository: fixture.repository)
+        #expect(remotes.map(\.name) == ["gitea", "origin"])
+        #expect(remotes.first { $0.name == "origin" }?.fetchURL == "https://example.com/summit.git")
+        #expect(remotes.first { $0.name == "gitea" }?.fetchURL == "https://git.internal/summit.git")
+    }
+
+    @Test("publishing a branch uses the named remote rather than assuming origin")
+    func pushSetsUpstreamOnNamedRemote() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        // A bare repository standing in for a server, deliberately not called "origin".
+        let server = fixture.worktreeRoot("server.git")
+        try await fixture.git(["init", "--quiet", "--bare", server.path], in: fixture.root)
+        try await fixture.git(["remote", "add", "gitea", server.path])
+
+        try await client.push(worktree: fixture.repository, remote: "gitea", setUpstream: true)
+
+        let branches = try await client.branches(repository: fixture.repository)
+        let main = try #require(branches.first { $0.name == "main" })
+        #expect(main.upstreamName == "gitea/main")
+        #expect(main.ahead == 0)
+        #expect(main.behind == 0)
+    }
+
+    @Test("publishing without a remote is refused rather than defaulting to origin")
+    func pushWithoutRemoteIsRefused() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        await #expect(throws: GitError.self) {
+            _ = try await fixture.client.push(worktree: fixture.repository, remote: nil, setUpstream: true)
+        }
+    }
+
+    @Test("fetching a named remote addresses only that remote")
+    func fetchNamedRemote() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        let server = fixture.worktreeRoot("server.git")
+        try await fixture.git(["init", "--quiet", "--bare", server.path], in: fixture.root)
+        try await fixture.git(["remote", "add", "gitea", server.path])
+        try await client.push(worktree: fixture.repository, remote: "gitea", setUpstream: true)
+
+        // Naming a remote that does not exist must fail, proving the name is really used.
+        await #expect(throws: GitError.self) {
+            _ = try await client.fetch(worktree: fixture.repository, remote: "origin")
+        }
+        _ = try await client.fetch(worktree: fixture.repository, remote: "gitea")
     }
 
     // MARK: - Status, staging, diff, commit

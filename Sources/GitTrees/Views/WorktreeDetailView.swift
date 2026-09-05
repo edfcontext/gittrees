@@ -161,16 +161,17 @@ struct WorktreeHeaderBar: View {
 
     private var actions: some View {
         HStack(spacing: 6) {
+            // Only worth the space when there is actually a choice to make.
+            if service.remotes.count > 1 { remotePicker }
+
             Button("Fetch") { Task { await service.fetch() } }
-                .help("git fetch (⇧⌘F)")
+                .help(service.selectedRemote.map { "git fetch \($0) (⇧⌘F)" } ?? "git fetch --all (⇧⌘F)")
             Button("Pull") { Task { await service.pull() } }
-                .help("git pull (⇧⌘P)")
+                .help(service.selectedRemote.map { "git pull \($0) (⇧⌘P)" } ?? "git pull (⇧⌘P)")
             Button(service.selectedBranchNeedsUpstream ? "Push…" : "Push") {
                 Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
             }
-            .help(service.selectedBranchNeedsUpstream
-                  ? "git push --set-upstream origin \(worktree.branchName ?? "")"
-                  : "git push (⇧⌘U)")
+            .help(pushHelp)
 
             Divider().frame(height: 16)
 
@@ -196,6 +197,41 @@ struct WorktreeHeaderBar: View {
         }
         .controlSize(.small)
         .disabled(service.isBusy(worktree))
+    }
+
+    /// Chooses which remote fetch, pull and push address.
+    private var remotePicker: some View {
+        Menu {
+            Picker("Remote", selection: remoteBinding) {
+                Text("Automatic").tag(String?.none)
+                Divider()
+                ForEach(service.remotes) { remote in
+                    Text(remote.name).tag(String?.some(remote.name))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label(service.selectedRemote ?? "Automatic", systemImage: "cloud")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Which remote Fetch, Pull and Push use. Automatic fetches every remote and lets pull and push follow the branch's own tracking configuration.")
+    }
+
+    private var remoteBinding: Binding<String?> {
+        Binding(
+            get: { service.selectedRemote },
+            set: { service.selectedRemote = $0 }
+        )
+    }
+
+    private var pushHelp: String {
+        guard service.selectedBranchNeedsUpstream else {
+            return service.selectedRemote.map { "git push \($0) (⇧⌘U)" } ?? "git push (⇧⌘U)"
+        }
+        let remote = service.remoteForPublishing ?? "<remote>"
+        return "git push --set-upstream \(remote) \(worktree.branchName ?? "")"
     }
 
     private func openInPreferredEditor() {

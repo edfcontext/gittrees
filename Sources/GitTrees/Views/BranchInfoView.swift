@@ -13,6 +13,8 @@ struct BranchInfoView: View {
             VStack(alignment: .leading, spacing: 14) {
                 worktreeSection
                 branchSection
+                identitySection
+                remotesSection
                 otherWorktreesSection
             }
             .padding(14)
@@ -57,6 +59,38 @@ struct BranchInfoView: View {
         } else {
             InfoSection(title: "Branch") {
                 InfoRow(label: "State", value: "No branch is checked out in this worktree.")
+            }
+        }
+    }
+
+    /// Who a commit made here would be authored as, and where that came from.
+    private var identitySection: some View {
+        InfoSection(title: "Commit Identity") {
+            let identity = service.identity
+            InfoRow(label: "Name", value: identity.name ?? "Not configured")
+            InfoRow(label: "Email", value: identity.email ?? "Not configured")
+            InfoRow(label: "Source", value: identity.scopeDescription)
+            if !identity.isComplete {
+                InfoRow(label: "Note", value: "Git will refuse to commit until user.name and user.email are set.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remotesSection: some View {
+        if !service.remotes.isEmpty {
+            InfoSection(title: "Remotes") {
+                ForEach(service.remotes) { remote in
+                    InfoRow(
+                        label: remote.name,
+                        value: remote.fetchURL ?? "No URL configured",
+                        monospaced: true
+                    )
+                }
+                InfoRow(
+                    label: "In use",
+                    value: service.selectedRemote ?? "Automatic (per branch tracking)"
+                )
             }
         }
     }
