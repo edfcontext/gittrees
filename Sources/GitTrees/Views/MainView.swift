@@ -244,8 +244,15 @@ struct MainView: View {
             await service.open(directory: pending)
             return
         }
-        guard let url = preferences.consumeLaunchRestore() else { return }
-        await service.open(directory: url)
+        let urls = preferences.consumeLaunchRestore()
+        guard let first = urls.first else { return }
+        await service.open(directory: first)
+        let extras = Array(urls.dropFirst())
+        guard !extras.isEmpty else { return }
+        session.enqueuePendingDirectories(extras)
+        for _ in extras {
+            openWindow(id: GitTreesScene.repositoryWindowID)
+        }
     }
 
     private func handleOpenPanel(_ result: Result<[URL], Error>) {
@@ -257,7 +264,7 @@ struct MainView: View {
     /// projects can stay open at once.
     private func openRepository(at url: URL) async {
         if service.repository != nil {
-            session.pendingDirectory = url
+            session.enqueuePendingDirectory(url)
             openWindow(id: GitTreesScene.repositoryWindowID)
         } else {
             await service.open(directory: url)

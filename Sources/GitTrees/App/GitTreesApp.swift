@@ -6,8 +6,8 @@ enum GitTreesScene {
     static let repositoryWindowID = "repository"
 }
 
-/// Shared across windows: which repository is key (for Settings) and a path a newly
-/// created window should open.
+/// Shared across windows: which repository is key (for Settings) and paths newly
+/// created windows should open.
 @MainActor
 @Observable
 final class AppSession {
@@ -15,8 +15,16 @@ final class AppSession {
     let inactiveService: RepositoryService
     weak var keyService: RepositoryService?
     weak var keyCommands: AppCommands?
-    /// Consumed by the next window that appears, then cleared.
-    var pendingDirectory: URL?
+    /// Consumed FIFO by windows as they appear.
+    private var pendingDirectories: [URL] = []
+    /// Live repository windows, keyed by their service identity.
+    private var liveWindowIDs: Set<ObjectIdentifier> = []
+    /// Set from `applicationShouldTerminate` before windows start closing on ⌘Q.
+    private(set) static var isTerminating = false
+
+    static func markTerminating() {
+        isTerminating = true
+    }
 
     init(preferences: PreferencesService) {
         self.inactiveService = RepositoryService(preferences: preferences)
@@ -26,10 +34,31 @@ final class AppSession {
         keyService ?? inactiveService
     }
 
+    func enqueuePendingDirectory(_ url: URL) {
+        pendingDirectories.append(url)
+    }
+
+    func enqueuePendingDirectories(_ urls: [URL]) {
+        pendingDirectories.append(contentsOf: urls)
+    }
+
     func takePendingDirectory() -> URL? {
-        let url = pendingDirectory
-        pendingDirectory = nil
-        return url
+        guard !pendingDirectories.isEmpty else { return nil }
+        return pendingDirectories.removeFirst()
+    }
+
+    func registerWindow(_ service: RepositoryService) {
+        liveWindowIDs.insert(ObjectIdentifier(service))
+    }
+
+    /// Drops the closed window from the restore list unless this is a quit — closing
+    /// the last window terminates the app, and ⌘Q closes every window, so both would
+    /// otherwise wipe the session we want to reopen.
+    func windowWillClose(_ service: RepositoryService, preferences: PreferencesService) {
+        liveWindowIDs.remove(ObjectIdentifier(service))
+        let quitting = AppSession.isTerminating || liveWindowIDs.isEmpty
+        guard !quitting, let repository = service.repository else { return }
+        preferences.forgetOpen(repository.mainWorktreePath.path)
     }
 }
 
@@ -119,8 +148,11 @@ struct RepositoryWindow: View {
                     session.keyService = service
                     session.keyCommands = commands
                     service.refreshOnWindowActivation()
+                } onWillClose: {
+                    session.windowWillClose(service, preferences: preferences)
                 }
             )
+            .onAppear { session.registerWindow(service) }
             .focusedSceneValue(\.repositoryService, service)
             .focusedSceneValue(\.appCommands, commands)
     }
@@ -132,10 +164,16 @@ struct RepositoryWindow: View {
 
 /// Makes the process a normal foreground application even when it is launched as a
 /// bare SwiftPM executable (`swift run`) rather than from the built `.app` bundle.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        AppSession.markTerminating()
+        return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

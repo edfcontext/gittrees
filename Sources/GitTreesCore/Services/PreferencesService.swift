@@ -15,6 +15,7 @@ public final class PreferencesService {
         static let openInEditorAfterCreate = "openInEditorAfterCreate"
         static let recentRepositories = "recentRepositories"
         static let lastRepositoryPath = "lastRepositoryPath"
+        static let openRepositoryPaths = "openRepositoryPaths"
         static let restoreLastRepository = "restoreLastRepository"
         static let worktreeRoots = "worktreeRoots"
         static let diffContextLines = "diffContextLines"
@@ -42,7 +43,18 @@ public final class PreferencesService {
         self.recentRepositories = Self.decode([RecentRepository].self, from: defaults, key: Key.recentRepositories) ?? []
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
         self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
-        self.lastRepositoryPath = defaults.string(forKey: Key.lastRepositoryPath)
+        let lastPath = defaults.string(forKey: Key.lastRepositoryPath)
+        self.lastRepositoryPath = lastPath
+        // A previous version stored only the last window. Lift that into the list so
+        // an upgrade still reopens it, then prefer the multi-window list once written.
+        if let stored = defaults.stringArray(forKey: Key.openRepositoryPaths), !stored.isEmpty {
+            self.openRepositoryPaths = stored
+        } else if let lastPath {
+            self.openRepositoryPaths = [lastPath]
+        } else {
+            self.openRepositoryPaths = []
+        }
+        defaults.set(openRepositoryPaths, forKey: Key.openRepositoryPaths)
     }
 
     // MARK: - Stored settings
@@ -95,7 +107,13 @@ public final class PreferencesService {
         didSet { defaults.set(lastRepositoryPath, forKey: Key.lastRepositoryPath) }
     }
 
-    /// In-memory: the first window at launch consumes this so later windows stay empty.
+    /// Paths of repository windows open in the current session, in open order.
+    public private(set) var openRepositoryPaths: [String] {
+        didSet { defaults.set(openRepositoryPaths, forKey: Key.openRepositoryPaths) }
+    }
+
+    /// In-memory: launch restore is handed out once so extra windows opened later
+    /// stay empty rather than repeating the session.
     private var didConsumeLaunchRestore = false
 
     // MARK: - Recent repositories
@@ -107,7 +125,22 @@ public final class PreferencesService {
             at: 0
         )
         recentRepositories = Array(entries.prefix(Self.recentLimit))
-        lastRepositoryPath = repository.mainWorktreePath.path
+        let path = repository.mainWorktreePath.path
+        lastRepositoryPath = path
+        rememberOpen(path)
+    }
+
+    /// Records a repository window as part of the session to restore at next launch.
+    public func rememberOpen(_ path: String) {
+        if !openRepositoryPaths.contains(path) {
+            openRepositoryPaths.append(path)
+        }
+    }
+
+    /// Drops a repository window from the restore list (the window closed, or the
+    /// repository was closed in place).
+    public func forgetOpen(_ path: String) {
+        openRepositoryPaths.removeAll { $0 == path }
     }
 
     public func removeRecent(_ recent: RecentRepository) {
@@ -118,23 +151,26 @@ public final class PreferencesService {
         recentRepositories = []
     }
 
-    /// The repository to reopen at launch, when the user has asked for that and the
-    /// directory still exists.
-    public func repositoryToRestore() -> URL? {
-        guard restoreLastRepository, let path = lastRepositoryPath else { return nil }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return nil
+    /// Directories of repository windows to reopen at launch, skipping any that
+    /// no longer exist on disk.
+    public func repositoriesToRestore() -> [URL] {
+        guard restoreLastRepository else { return [] }
+        return openRepositoryPaths.compactMap { path in
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                return nil
+            }
+            return URL(fileURLWithPath: path)
         }
-        return URL(fileURLWithPath: path)
     }
 
-    /// Returns the launch-restore URL once. Extra windows opened afterwards stay empty
-    /// rather than all reopening the same repository.
-    public func consumeLaunchRestore() -> URL? {
-        guard !didConsumeLaunchRestore else { return nil }
+    /// Returns every restore URL once. The first window opens the first path and
+    /// creates further windows for the rest; later New Window calls stay empty.
+    public func consumeLaunchRestore() -> [URL] {
+        guard !didConsumeLaunchRestore else { return [] }
         didConsumeLaunchRestore = true
-        return repositoryToRestore()
+        return repositoriesToRestore()
     }
 
     // MARK: - Per-repository worktree root

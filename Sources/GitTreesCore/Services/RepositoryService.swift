@@ -299,6 +299,9 @@ public final class RepositoryService {
     }
 
     public func closeRepository() {
+        if let repository {
+            preferences.forgetOpen(repository.mainWorktreePath.path)
+        }
         repository = nil
         worktrees = []
         branches = []

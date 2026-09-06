@@ -121,7 +121,7 @@ struct PreferencesView: View {
 
             Section("Display") {
                 Toggle("Show remote branches in the sidebar", isOn: $preferences.showRemoteBranches)
-                Toggle("Reopen the last repository at launch", isOn: $preferences.restoreLastRepository)
+                Toggle("Reopen repository windows at launch", isOn: $preferences.restoreLastRepository)
             }
         }
         .formStyle(.grouped)

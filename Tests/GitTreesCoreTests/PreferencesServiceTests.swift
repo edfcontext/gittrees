@@ -93,18 +93,114 @@ struct PreferencesServiceTests {
         )
     }
 
-    @Test("only the first window consumes the launch restore")
-    func launchRestoreIsConsumedOnce() {
+    @Test("only the first wave of windows consumes the launch restore")
+    func launchRestoreIsConsumedOnce() throws {
         let (defaults, name) = Self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: name) }
+        let directory = try Self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
 
         let preferences = PreferencesService(defaults: defaults)
         preferences.restoreLastRepository = true
-        preferences.noteOpened(Self.repository(at: "/tmp"))
+        preferences.noteOpened(Self.repository(at: directory.path))
 
         let first = preferences.consumeLaunchRestore()
-        #expect(first?.path == "/tmp")
-        #expect(preferences.consumeLaunchRestore() == nil)
-        #expect(preferences.repositoryToRestore()?.path == "/tmp")
+        #expect(first.map(\.path) == [directory.path])
+        #expect(preferences.consumeLaunchRestore().isEmpty)
+        #expect(preferences.repositoriesToRestore().map(\.path) == [directory.path])
+    }
+
+    @Test("every open repository is restored, in the order the windows were opened")
+    func launchRestoreReturnsEveryOpenRepository() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let firstDir = try Self.makeDirectory()
+        let secondDir = try Self.makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: firstDir)
+            try? FileManager.default.removeItem(at: secondDir)
+        }
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.restoreLastRepository = true
+        preferences.noteOpened(Self.repository(at: firstDir.path))
+        preferences.noteOpened(Self.repository(at: secondDir.path))
+        preferences.noteOpened(Self.repository(at: firstDir.path))
+
+        #expect(preferences.openRepositoryPaths == [firstDir.path, secondDir.path])
+        #expect(preferences.consumeLaunchRestore().map(\.path) == [firstDir.path, secondDir.path])
+    }
+
+    @Test("a previous last-repository setting is promoted into the open-window list")
+    func launchRestoreMigratesSingleLastRepository() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let directory = try Self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        defaults.set(directory.path, forKey: "lastRepositoryPath")
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.restoreLastRepository = true
+        #expect(preferences.openRepositoryPaths == [directory.path])
+        #expect(PreferencesService(defaults: defaults).openRepositoryPaths == [directory.path])
+        #expect(preferences.consumeLaunchRestore().map(\.path) == [directory.path])
+    }
+
+    @Test("directories that no longer exist are skipped rather than restored")
+    func launchRestoreSkipsMissingDirectories() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let existing = try Self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: existing) }
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.restoreLastRepository = true
+        preferences.noteOpened(Self.repository(at: existing.path))
+        preferences.noteOpened(Self.repository(at: "/tmp/gittrees-does-not-exist-\(UUID().uuidString)"))
+
+        #expect(preferences.repositoriesToRestore().map(\.path) == [existing.path])
+    }
+
+    @Test("closing a repository window drops it from the restore list")
+    func forgetOpenRemovesFromRestoreList() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let kept = try Self.makeDirectory()
+        let closed = try Self.makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: kept)
+            try? FileManager.default.removeItem(at: closed)
+        }
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.restoreLastRepository = true
+        preferences.noteOpened(Self.repository(at: kept.path))
+        preferences.noteOpened(Self.repository(at: closed.path))
+        preferences.forgetOpen(closed.path)
+
+        #expect(preferences.consumeLaunchRestore().map(\.path) == [kept.path])
+    }
+
+    @Test("restore can be turned off without forgetting which windows were open")
+    func restoreToggleDoesNotClearOpenList() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let directory = try Self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let preferences = PreferencesService(defaults: defaults)
+        preferences.noteOpened(Self.repository(at: directory.path))
+        preferences.restoreLastRepository = false
+
+        #expect(preferences.consumeLaunchRestore().isEmpty)
+        #expect(preferences.openRepositoryPaths == [directory.path])
+    }
+
+    static func makeDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gittrees-prefs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.standardizedFileURL
     }
 }
