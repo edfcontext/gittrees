@@ -84,7 +84,7 @@ opt-in before passing `--force`.
 
 ### Remotes
 
-**Add Remote…** (Repository menu, the toolbar's remote menu, or Settings → Remote) runs
+**Add Remote…** (Repository menu, the toolbar's remote menu, or the Repository tab) runs
 `git remote add <name> <url>`. `origin` is offered as the name for a repository that has
 none yet. Renaming, changing a URL and removing a remote are still command-line work —
 this exists so a repository created with `git init` here can be connected to something,
@@ -107,11 +107,9 @@ against a remote that does not exist.
 
 The commit bar shows the identity a commit would carry (`as Dev <dev@example.com>`), and
 Commit is disabled with a warning when `user.name` or `user.email` is missing — rather
-than letting Git reject the commit after the message has been written. Branch Info also
+than letting Git reject the commit after the message has been written. The Repository tab
 reports whether the identity is set on the repository or inherited from your global
-configuration.
-
-Settings can pin an identity with `git config --local`. That config lives in the shared
+configuration, and can pin one with `git config --local`. That config lives in the shared
 git directory, so it applies to **every worktree of the repository** — the UI says so,
 because with several worktrees open that is easy to get wrong. Your global
 `~/.gitconfig` is never modified, and *Use Global Identity* clears the pin.
@@ -129,7 +127,7 @@ Suggested:     ~/Development/nalcus/worktrees/summit/zpl-templates
 ```
 
 The suggestion updates as you type and can be overridden; the root is configurable per
-repository in Settings.
+repository on the Repository tab.
 
 ### Pull requests (GitHub CLI)
 

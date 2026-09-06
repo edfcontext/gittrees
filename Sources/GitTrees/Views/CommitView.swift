@@ -49,7 +49,7 @@ struct CommitView: View {
                     Label("No commit identity set", systemImage: "person.crop.circle.badge.exclamationmark")
                         .font(.caption2)
                         .foregroundStyle(.orange)
-                        .help("Set user.name and user.email in Settings, or in your global Git configuration.")
+                        .help("Set user.name and user.email on the Repository tab, or in your global Git configuration.")
                 } else if let identity = service.identity.displayName {
                     Text("as \(identity)")
                         .font(.caption2)

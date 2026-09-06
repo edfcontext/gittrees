@@ -2,12 +2,12 @@ import GitTreesCore
 import SwiftUI
 
 /// The main content area: a header describing the selected worktree, then Changes,
-/// History and Branch Info.
+/// History and Repository.
 struct WorktreeDetailView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case changes = "Changes"
         case history = "History"
-        case branchInfo = "Branch Info"
+        case branchInfo = "Repository"
 
         var id: String { rawValue }
     }
@@ -74,7 +74,7 @@ struct WorktreeDetailView: View {
             case .history:
                 HistoryView()
             case .branchInfo:
-                BranchInfoView(worktree: worktree)
+                BranchInfoView(worktree: worktree, onAddRemote: onAddRemote)
             }
         }
     }

@@ -848,7 +848,7 @@ public final class RepositoryService {
         }
     }
 
-    /// Adds a remote and reloads, so the picker and Branch Info pick it up immediately.
+    /// Adds a remote and reloads, so the picker and Repository tab pick it up immediately.
     @discardableResult
     public func addRemote(name: String, url: String) async -> Bool {
         guard let repository else { return false }

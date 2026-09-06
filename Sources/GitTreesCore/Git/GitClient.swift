@@ -388,7 +388,7 @@ public final class GitClient: Sendable {
             .filter { !$0.isEmpty }
     }
 
-    /// Remotes with their fetch URLs, for display in Branch Info and the remote picker.
+    /// Remotes with their fetch URLs, for display on the Repository tab and the remote picker.
     public func remotes(repository: URL) async throws -> [Remote] {
         let names = try await remoteNames(repository: repository)
         guard !names.isEmpty else { return [] }
