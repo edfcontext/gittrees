@@ -59,6 +59,10 @@ public final class GitHubProcessRunner: GitHubRunning {
             throw GitHubError.launchFailed(arguments: command.arguments, reason: failure.reason)
         }
 
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+
         guard command.acceptableExitCodes.contains(result.exitCode) else {
             throw GitHubError.commandFailed(
                 GitFailure(

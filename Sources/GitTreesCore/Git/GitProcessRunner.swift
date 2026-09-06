@@ -54,6 +54,12 @@ public final class GitProcessRunner: GitRunning {
             throw GitError.launchFailed(arguments: arguments, reason: failure.reason)
         }
 
+        // Cancelling a refresh SIGTERMs git (exit 15). That is not a Git failure —
+        // it is how we stop a superseded read, and must not become an error alert.
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+
         guard command.acceptableExitCodes.contains(result.exitCode) else {
             throw GitError.commandFailed(
                 GitFailure(

@@ -83,6 +83,32 @@ struct GitExecutableTests {
         #expect(result.trimmedStdout.hasPrefix("git version"))
     }
 
+    @Test("cancelling a running command is not reported as a Git failure")
+    func cancelledProcessThrowsCancellation() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // A stand-in for git that ignores its argument vector and just waits.
+        // Refresh cancellation SIGTERMs this the same way it SIGTERMs a real git.
+        let stall = directory.appendingPathComponent("git")
+        try """
+        #!/bin/sh
+        exec /bin/sleep 30
+        """.write(to: stall, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stall.path)
+
+        let runner = GitProcessRunner(executablePath: stall.path)
+        let task = Task {
+            try await runner.run(GitCommand(["status"]))
+        }
+        try await Task.sleep(for: .milliseconds(80))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
     @Test("the default is the system git, not a bare name resolved through PATH")
     func defaultIsAnAbsolutePath() {
         // A bare "git" would be resolved against the inherited PATH, which is exactly

@@ -146,6 +146,7 @@ public final class RepositoryService {
     /// the first `await`, so two operations can never both pass it.
     private var busyWorktreePaths: Set<String> = []
     private var refreshTask: Task<Void, Never>?
+    private var windowActivationTask: Task<Void, Never>?
     private var dirtyScanTask: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
     private var gitHubTask: Task<Void, Never>?
@@ -317,23 +318,48 @@ public final class RepositoryService {
 
     /// Reloads worktrees and branches, then the selected worktree's status.
     public func refresh() {
-        refreshTask?.cancel()
-        refreshTask = Task { [weak self] in
-            await self?.reload()
-            self?.refreshSelectedWorktree()
-        }
+        startRefresh(presentError: true, retryOnce: false)
     }
 
     /// Called when this window becomes key, so Changes (and the rest of the
     /// worktree) pick up edits made in an IDE or another GitTrees window.
+    ///
+    /// Activation fires several notifications at once (`didBecomeActive`,
+    /// `didBecomeKey`, and sometimes a view reinstall). Starting a refresh on each
+    /// one cancels the previous mid-flight, SIGTERMs git, and used to surface that
+    /// as a "Could Not Read Repository" alert. Debouncing coalesces them; a silent
+    /// retry covers the first git after a long sleep, when disks and index locks
+    /// often fail once and then succeed.
     public func refreshOnWindowActivation() {
         guard repository != nil else { return }
-        refresh()
+        windowActivationTask?.cancel()
+        windowActivationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.startRefresh(presentError: false, retryOnce: true)
+        }
     }
 
-    private func reload() async {
+    private func startRefresh(presentError: Bool, retryOnce: Bool) {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            let firstPresented = presentError && !retryOnce
+            let ok = await self.reload(presentError: firstPresented)
+            if !ok, retryOnce, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                _ = await self.reload(presentError: true)
+            }
+            guard !Task.isCancelled else { return }
+            self.refreshSelectedWorktree()
+        }
+    }
+
+    @discardableResult
+    private func reload(presentError: Bool = true) async -> Bool {
         rebuildClientIfNeeded()
-        guard let repository else { return }
+        guard let repository else { return false }
         isRefreshing = true
         defer { isRefreshing = false }
 
@@ -356,10 +382,15 @@ public final class RepositoryService {
             scanDirtyStates()
             await refreshIdentity()
             refreshGitHub()
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
-            lastError = PresentableError(title: "Could Not Read Repository", error: error)
+            if Task.isCancelled { return false }
+            if presentError {
+                lastError = PresentableError(title: "Could Not Read Repository", error: error)
+            }
+            return false
         }
     }
 
@@ -408,7 +439,7 @@ public final class RepositoryService {
             } catch is CancellationError {
                 return
             } catch {
-                guard self.selectedWorktreePath == worktree.id else { return }
+                guard !Task.isCancelled, self.selectedWorktreePath == worktree.id else { return }
                 self.lastError = PresentableError(title: "Could Not Read Status", error: error)
             }
         }
