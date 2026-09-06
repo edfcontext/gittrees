@@ -63,6 +63,30 @@ public final class GitClient: Sendable {
         _ = try await run(["init"], in: directory)
     }
 
+    /// Creates `directory`, runs `git init` in it, and adds a remote.
+    ///
+    /// The folder must not already exist: this is a new workspace, not the "init an
+    /// existing folder" offer that `initializeRepository` covers.
+    public func createWorkspace(at directory: URL, remoteName: String, remoteURL: String) async throws {
+        let path = directory.path
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) {
+            throw GitError.couldNotCreateDirectory(
+                path: path,
+                reason: isDirectory.boolValue
+                    ? "the directory already exists"
+                    : "a file already exists at that path"
+            )
+        }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            throw GitError.couldNotCreateDirectory(path: path, reason: error.localizedDescription)
+        }
+        try await initializeRepository(at: directory)
+        try await addRemote(repository: directory, name: remoteName, url: remoteURL)
+    }
+
     // MARK: - Worktrees
 
     public func worktrees(repository: URL) async throws -> [Worktree] {

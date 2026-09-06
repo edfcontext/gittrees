@@ -197,6 +197,21 @@ struct PreferencesServiceTests {
         #expect(preferences.openRepositoryPaths == [directory.path])
     }
 
+    @Test("the last New Repository parent is remembered")
+    func workspaceParentPersists() throws {
+        let (defaults, name) = Self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let parent = try Self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        let first = PreferencesService(defaults: defaults)
+        first.noteWorkspaceParent(parent)
+        #expect(first.defaultWorkspaceParent().standardizedFileURL == parent.standardizedFileURL)
+
+        let second = PreferencesService(defaults: defaults)
+        #expect(second.defaultWorkspaceParent().standardizedFileURL == parent.standardizedFileURL)
+    }
+
     static func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("gittrees-prefs-\(UUID().uuidString)", isDirectory: true)

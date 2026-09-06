@@ -8,6 +8,7 @@ struct RepositorySidebar: View {
 
     @Binding var selection: SidebarItem?
     let onNewWorktree: () -> Void
+    let onNewWorkspace: () -> Void
     let onOpenRepository: () -> Void
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
@@ -68,6 +69,7 @@ struct RepositorySidebar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .contextMenu {
+            Button("New Repository…", action: onNewWorkspace)
             Button("Open Repository…", action: onOpenRepository)
             if let repository = service.repository {
                 Button("Reveal in Finder") {

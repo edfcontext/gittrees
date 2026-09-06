@@ -59,6 +59,8 @@ public enum GitError: Error, LocalizedError, Sendable {
     case commandFailed(GitFailure)
     /// The chosen directory is not inside a Git repository.
     case notARepository(path: String)
+    /// Creating a new workspace folder failed before Git ran.
+    case couldNotCreateDirectory(path: String, reason: String)
     /// Git's machine-readable output did not match the documented format.
     case unexpectedOutput(reason: String, arguments: [String])
     /// A destructive operation was already running against the same worktree.
@@ -74,6 +76,8 @@ public enum GitError: Error, LocalizedError, Sendable {
             return failure.message
         case .notARepository(let path):
             return "\(path) is not inside a Git repository."
+        case .couldNotCreateDirectory(let path, let reason):
+            return "Could not create \(path): \(reason)"
         case .unexpectedOutput(let reason, _):
             return "Unexpected output from git: \(reason)"
         case .operationInProgress(let path):
@@ -98,6 +102,8 @@ public enum GitError: Error, LocalizedError, Sendable {
             return "Install the Xcode Command Line Tools, or set a different git path in Settings."
         case .notARepository:
             return "Choose a directory that is inside a Git repository."
+        case .couldNotCreateDirectory:
+            return "Choose a different folder name, or a parent directory you can write to."
         default:
             return nil
         }

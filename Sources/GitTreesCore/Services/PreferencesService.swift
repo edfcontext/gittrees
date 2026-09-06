@@ -21,6 +21,7 @@ public final class PreferencesService {
         static let diffContextLines = "diffContextLines"
         static let showRemoteBranches = "showRemoteBranches"
         static let preferredRemotes = "preferredRemotes"
+        static let lastWorkspaceParent = "lastWorkspaceParent"
     }
 
     /// The number of recently opened repositories kept in the Open Recent menu.
@@ -43,6 +44,7 @@ public final class PreferencesService {
         self.recentRepositories = Self.decode([RecentRepository].self, from: defaults, key: Key.recentRepositories) ?? []
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
         self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
+        self.lastWorkspaceParentPath = defaults.string(forKey: Key.lastWorkspaceParent)
         let lastPath = defaults.string(forKey: Key.lastRepositoryPath)
         self.lastRepositoryPath = lastPath
         // A previous version stored only the last window. Lift that into the list so
@@ -107,6 +109,11 @@ public final class PreferencesService {
         didSet { defaults.set(lastRepositoryPath, forKey: Key.lastRepositoryPath) }
     }
 
+    /// Parent folder last used by New Repository, so the next sheet starts there.
+    public private(set) var lastWorkspaceParentPath: String? {
+        didSet { defaults.set(lastWorkspaceParentPath, forKey: Key.lastWorkspaceParent) }
+    }
+
     /// Paths of repository windows open in the current session, in open order.
     public private(set) var openRepositoryPaths: [String] {
         didSet { defaults.set(openRepositoryPaths, forKey: Key.openRepositoryPaths) }
@@ -141,6 +148,30 @@ public final class PreferencesService {
     /// repository was closed in place).
     public func forgetOpen(_ path: String) {
         openRepositoryPaths.removeAll { $0 == path }
+    }
+
+    public func noteWorkspaceParent(_ parent: URL) {
+        lastWorkspaceParentPath = parent.standardizedFileURL.path
+    }
+
+    /// Parent directory offered by New Repository: the last one used, then
+    /// `~/Development` if it exists, then the home folder.
+    public func defaultWorkspaceParent() -> URL {
+        if let stored = lastWorkspaceParentPath {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: stored, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                return URL(fileURLWithPath: stored, isDirectory: true)
+            }
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let development = home.appendingPathComponent("Development", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: development.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return development
+        }
+        return home
     }
 
     public func removeRecent(_ recent: RecentRepository) {

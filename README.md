@@ -44,7 +44,8 @@ behave exactly as they do on the command line.
 ## Features
 
 - **Repositories** — open any directory inside a repository with a native panel
-  (⌘O); a linked worktree resolves to the repository it belongs to. Choosing a folder
+  (⌘O); a linked worktree resolves to the repository it belongs to. **New Repository**
+  (⌥⌘N) creates a folder, runs `git init`, and adds a remote in one step. Choosing a folder
   that is not yet a repository offers to `git init` it in place, leaving anything
   already there untouched. Recents are remembered and every open repository window is
   restored at launch. Each window holds one repository: **New Window** (⇧⌘N) opens another,
@@ -63,7 +64,8 @@ behave exactly as they do on the command line.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
-  unified diff (working tree or index), and a commit editor. Status reloads when the
+  unified diff (working tree or index), and a commit editor. Right-click an untracked
+  file to add it (or its folder) to this worktree's `.gitignore`. Status reloads when the
   window becomes key (returning from an IDE) as well as after GitTrees operations and
   ⌘R.
 - **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
@@ -201,7 +203,7 @@ Sources/
     Views/               MainView, RepositorySidebar, WorktreeList, BranchList,
                          WorktreeDetailView, ChangesView, DiffView, CommitView,
                          HistoryView, BranchInfoView, NewWorktreeSheet,
-                         RemoveWorktreeSheet, PreferencesView
+                         NewWorkspaceSheet, RemoveWorktreeSheet, PreferencesView
 Tests/GitTreesCoreTests/
 ```
 
@@ -216,8 +218,10 @@ Two layers:
   plus commit metadata and `name-status -z` file lists.
 - **Integration suite** drives the real `git` binary in throwaway repositories, which is
   the only way to prove the argument vectors are ones Git accepts: `git init` on a
-  folder with existing content, worktree lifecycle,
+  folder with existing content, creating a new workspace folder with `git init` and a
+  remote, worktree lifecycle,
   branch-already-checked-out refusal, switching the main worktree's branch, pruning, staging on an unborn HEAD, diffs, commits,
+  ignoring an untracked path via `.gitignore`,
   inspecting a commit's files and patch (including the root commit and a rename),
   hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
   linked worktrees, adding remotes, publishing a branch to a remote that is deliberately

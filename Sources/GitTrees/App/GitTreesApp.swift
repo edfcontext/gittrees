@@ -191,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class AppCommands {
     var openRepositoryRequested = false
     var newWorktreeRequested = false
+    var newWorkspaceRequested = false
     var openInEditorRequested = false
     var addRemoteRequested = false
     var createPullRequestRequested = false
@@ -200,6 +201,7 @@ final class AppCommands {
 
     func openRepository() { openRepositoryRequested = true }
     func newWorktree() { newWorktreeRequested = true }
+    func newWorkspace() { newWorkspaceRequested = true }
     func openInEditor() { openInEditorRequested = true }
     func addRemote() { addRemoteRequested = true }
     func createPullRequest() { createPullRequestRequested = true }
@@ -225,6 +227,9 @@ private struct GitTreesCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Window") { commands?.newWindow() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+
+            Button("New Repository…") { commands?.newWorkspace() }
+                .keyboardShortcut("n", modifiers: [.command, .option])
 
             Button("Open Repository…") { commands?.openRepository() }
                 .keyboardShortcut("o", modifiers: .command)

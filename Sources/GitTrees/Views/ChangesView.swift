@@ -109,6 +109,15 @@ struct FileChangeList: View {
         switch action {
         case .stage:
             Button("Stage File") { Task { await service.stage([change]) } }
+            if change.kind == .untracked {
+                Divider()
+                Button("Add to .gitignore") { Task { await service.ignore(change) } }
+                if !change.directory.isEmpty {
+                    Button("Ignore Folder “\(change.directory)”") {
+                        Task { await service.ignoreDirectory(of: change) }
+                    }
+                }
+            }
         case .unstage:
             Button("Unstage File") { Task { await service.unstage([change]) } }
         case nil:

@@ -190,6 +190,58 @@ struct GitClientIntegrationTests {
         }
     }
 
+    @Test("a new workspace folder is created, initialised, and given a remote")
+    func createWorkspaceFolderInitAndRemote() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-newws-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // A space in the folder name proves the path is not passed through a shell.
+        let workspace = root.appendingPathComponent("new workspace", isDirectory: true)
+        let client = GitClient()
+
+        try await client.createWorkspace(
+            at: workspace,
+            remoteName: "origin",
+            remoteURL: "git@github.com:owner/summit.git"
+        )
+
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".git").path))
+
+        let repository = try await client.discoverRepository(at: workspace)
+        #expect(repository.mainWorktreePath.standardizedFileURL == workspace.standardizedFileURL)
+        #expect(repository.name == "new workspace")
+
+        let remotes = try await client.remotes(repository: workspace)
+        #expect(remotes.map(\.name) == ["origin"])
+        #expect(remotes.first?.fetchURL == "git@github.com:owner/summit.git")
+    }
+
+    @Test("creating a workspace where a folder already exists is refused")
+    func createWorkspaceRefusesExistingDirectory() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-exists-\(UUID().uuidString)", isDirectory: true)
+        let workspace = root.appendingPathComponent("taken", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        do {
+            try await GitClient().createWorkspace(
+                at: workspace,
+                remoteName: "origin",
+                remoteURL: "https://example.com/summit.git"
+            )
+            Issue.record("creating a workspace on an existing directory should have failed")
+        } catch let error as GitError {
+            guard case .couldNotCreateDirectory(_, let reason) = error else {
+                Issue.record("expected couldNotCreateDirectory, got \(error)")
+                return
+            }
+            #expect(reason.contains("already exists"))
+        }
+    }
+
     // MARK: - Worktrees
 
     @Test("creating, locking, unlocking and removing a worktree round-trips")
@@ -630,6 +682,29 @@ struct GitClientIntegrationTests {
         // --untracked-files=all lists the file itself, not just its directory, which is
         // what makes per-file staging possible.
         #expect(status.changes.contains { $0.kind == .untracked && $0.path == "docs/new note.md" })
+    }
+
+    @Test("ignoring an untracked path drops it from status")
+    func ignoreUntrackedPath() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        try fixture.write("scratch\n", to: "docs/new note.md")
+        var status = try await fixture.client.statusSummary(worktree: fixture.repository)
+        #expect(status.changes.contains { $0.kind == .untracked && $0.path == "docs/new note.md" })
+
+        try Gitignore.append(
+            pattern: Gitignore.pattern(forPath: "docs/new note.md"),
+            inWorktree: fixture.repository
+        )
+
+        status = try await fixture.client.statusSummary(worktree: fixture.repository)
+        #expect(!status.changes.contains { $0.path == "docs/new note.md" })
+        let gitignore = try String(
+            contentsOf: fixture.repository.appendingPathComponent(".gitignore"),
+            encoding: .utf8
+        )
+        #expect(gitignore.contains("/docs/new note.md"))
     }
 
     @Test("staging and unstaging a file moves it between the two lists")

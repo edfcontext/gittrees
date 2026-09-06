@@ -29,6 +29,7 @@ struct MainView: View {
             RepositorySidebar(
                 selection: $selection,
                 onNewWorktree: { activeSheet = .newWorktree },
+                onNewWorkspace: { activeSheet = .newWorkspace },
                 onOpenRepository: { showingOpenPanel = true },
                 onRequestRemoval: { requestRemoval(of: $0) },
                 onRequestLock: { activeSheet = .lockWorktree($0) }
@@ -77,6 +78,8 @@ struct MainView: View {
             switch sheet {
             case .newWorktree:
                 NewWorktreeSheet(preselectedBranch: preselectedBranchForSheet)
+            case .newWorkspace:
+                NewWorkspaceSheet()
             case .removeWorktree(let removal):
                 RemoveWorktreeSheet(removal: removal)
             case .lockWorktree(let worktree):
@@ -107,6 +110,12 @@ struct MainView: View {
             if requested {
                 if service.repository != nil { activeSheet = .newWorktree }
                 commands.newWorktreeRequested = false
+            }
+        }
+        .onChange(of: commands.newWorkspaceRequested) { _, requested in
+            if requested {
+                activeSheet = .newWorkspace
+                commands.newWorkspaceRequested = false
             }
         }
         .onChange(of: commands.pendingRecent) { _, recent in
@@ -144,7 +153,10 @@ struct MainView: View {
     @ViewBuilder
     private var detail: some View {
         if service.repository == nil {
-            NoRepositoryView(onOpen: { showingOpenPanel = true })
+            NoRepositoryView(
+                onOpen: { showingOpenPanel = true },
+                onNewWorkspace: { activeSheet = .newWorkspace }
+            )
         } else if let worktree = service.selectedWorktree {
             WorktreeDetailView(
                 worktree: worktree,
@@ -300,6 +312,7 @@ struct MainView: View {
 /// so every modal goes through a single presenter rather than one modifier each.
 enum ActiveSheet: Identifiable {
     case newWorktree
+    case newWorkspace
     case removeWorktree(WorktreeRemoval)
     case lockWorktree(Worktree)
     case addRemote
@@ -308,6 +321,7 @@ enum ActiveSheet: Identifiable {
     var id: String {
         switch self {
         case .newWorktree: "new-worktree"
+        case .newWorkspace: "new-workspace"
         case .removeWorktree(let removal): "remove-\(removal.id)"
         case .lockWorktree(let worktree): "lock-\(worktree.id)"
         case .addRemote: "add-remote"
@@ -326,14 +340,16 @@ struct WorktreeRemoval: Identifiable {
 
 private struct NoRepositoryView: View {
     let onOpen: () -> Void
+    let onNewWorkspace: () -> Void
 
     var body: some View {
         ContentUnavailableView {
             Label("No Repository Open", systemImage: "point.3.filled.connected.trianglepath.dotted")
         } description: {
-            Text("Open a Git repository, or any of its worktrees, to get started. Choosing a folder that is not yet a repository offers to create one there.")
+            Text("Open a Git repository, create a new one, or choose any of its worktrees. Choosing a folder that is not yet a repository offers to create one there.")
         } actions: {
             Button("Open Repository…", action: onOpen)
+            Button("New Repository…", action: onNewWorkspace)
         }
     }
 }

@@ -75,6 +75,21 @@ public struct NewWorktreeRequest: Sendable, Equatable {
     }
 }
 
+/// Everything needed to create a new workspace folder, initialise it, and add a remote.
+public struct NewWorkspaceRequest: Sendable, Equatable {
+    public var directory: URL
+    public var remoteName: String
+    public var remoteURL: String
+    public var openInEditor: Bool
+
+    public init(directory: URL, remoteName: String, remoteURL: String, openInEditor: Bool) {
+        self.directory = directory
+        self.remoteName = remoteName
+        self.remoteURL = remoteURL
+        self.openInEditor = openInEditor
+    }
+}
+
 /// Holds the state of the open repository and mediates every Git operation.
 ///
 /// Views observe this object and call its methods; they never construct Git commands.
@@ -291,6 +306,28 @@ public final class RepositoryService {
 
         guard created == true else { return }
         await open(directory: directory)
+    }
+
+    /// Creates a new folder, runs `git init`, and adds a remote. Does not open the
+    /// result: the caller decides whether this window or a new one should take it.
+    public func createWorkspace(_ request: NewWorkspaceRequest) async -> URL? {
+        rebuildClientIfNeeded()
+        let name = request.remoteName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = request.remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !url.isEmpty else { return nil }
+
+        return await withOperation(label: "Creating workspace…") { [client] in
+            try await client.createWorkspace(
+                at: request.directory,
+                remoteName: name,
+                remoteURL: url
+            )
+        } onFailure: { error in
+            PresentableError(title: "Could Not Create Workspace", error: error)
+        } thenReturning: {
+            preferences.noteWorkspaceParent(request.directory.deletingLastPathComponent())
+            return request.directory
+        }
     }
 
     /// Dismisses the offer to create a repository without creating one.
@@ -747,6 +784,33 @@ public final class RepositoryService {
             try await client.unstage(worktree: worktree.path, paths: paths)
         } onFailure: { error in
             PresentableError(title: "Could Not Unstage Changes", error: error)
+        } thenReturning: { [weak self] in
+            self?.refreshSelectedWorktree()
+        }
+    }
+
+    /// Appends the untracked path to this worktree's `.gitignore` so it drops out of
+    /// Changes. The `.gitignore` edit itself is left unstaged for the user to commit.
+    public func ignore(_ change: FileChange) async {
+        await ignore(path: change.path, directory: false)
+    }
+
+    /// Appends a directory pattern (`path/`) to `.gitignore`.
+    public func ignoreDirectory(of change: FileChange) async {
+        let directory = change.directory
+        guard !directory.isEmpty else { return }
+        await ignore(path: directory, directory: true)
+    }
+
+    private func ignore(path: String, directory: Bool) async {
+        guard let worktree = selectedWorktree, !path.isEmpty else { return }
+        let pattern = directory
+            ? Gitignore.pattern(forDirectory: path)
+            : Gitignore.pattern(forPath: path)
+        _ = await withOperation(label: "Updating .gitignore…", worktree: worktree) {
+            try Gitignore.append(pattern: pattern, inWorktree: worktree.path)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Update .gitignore", error: error)
         } thenReturning: { [weak self] in
             self?.refreshSelectedWorktree()
         }
