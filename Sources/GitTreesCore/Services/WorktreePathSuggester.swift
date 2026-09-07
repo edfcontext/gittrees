@@ -2,23 +2,31 @@ import Foundation
 
 /// Suggests where a new worktree should live, given a repository and a branch name.
 ///
-/// The convention this supports is a sibling worktree root per repository:
+/// The convention this supports is a `.worktrees` directory beside the repository:
 ///
 ///     Repository:    ~/Development/nalcus/summit
-///     Worktree root: ~/Development/nalcus/worktrees/summit
+///     Worktree root: ~/Development/nalcus/.worktrees
 ///     Branch:        feature/zpl-templates
-///     Suggestion:    ~/Development/nalcus/worktrees/summit/zpl-templates
+///     Suggestion:    ~/Development/nalcus/.worktrees/zpl-templates
 public enum WorktreePathSuggester {
     /// Prefixes stripped when turning a branch name into a directory name. These are
     /// conventions, not Git semantics, so the result is only ever a suggestion.
     public static let strippedPrefixes = ["feature/", "feat/", "bugfix/", "fix/", "hotfix/", "chore/", "release/"]
 
-    /// The default worktree root for a repository: `<parent>/worktrees/<repo name>`.
+    /// The directory name the default worktree root uses.
+    public static let defaultRootName = ".worktrees"
+
+    /// The default worktree root for a repository: `<parent>/.worktrees`.
+    ///
+    /// The repository name is deliberately not a level of its own. Repositories that
+    /// share a parent share the `.worktrees` directory, and the branch directory inside it
+    /// is what names the checkout — which is what people look for when they go hunting
+    /// for one. A repository that wants its own root can still be given one on the
+    /// Repository tab.
     public static func defaultWorktreeRoot(forRepositoryAt path: URL) -> URL {
         path
             .deletingLastPathComponent()
-            .appendingPathComponent("worktrees", isDirectory: true)
-            .appendingPathComponent(path.lastPathComponent, isDirectory: true)
+            .appendingPathComponent(defaultRootName, isDirectory: true)
     }
 
     /// Turns `feature/zpl-templates` into `zpl-templates`.

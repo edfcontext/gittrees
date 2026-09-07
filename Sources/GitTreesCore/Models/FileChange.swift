@@ -156,6 +156,58 @@ public struct WorktreeStatus: Sendable, Hashable {
     public var conflicts: [FileChange] { changes.filter(\.isConflicted) }
     public var isClean: Bool { changes.isEmpty }
 
+    // MARK: - Selection
+
+    /// Identifies one row of the Changes list.
+    ///
+    /// A path is not enough: the same file appears in both the staged and unstaged
+    /// sections when part of it is in the index and part is not, and the two rows show
+    /// different diffs. Which side of the index the row is on is part of its identity.
+    public static func selectionKey(path: String, staged: Bool) -> String {
+        "\(staged ? "staged" : "worktree"):\(path)"
+    }
+
+    /// Splits a selection key back into the side and the path it names.
+    public static func selection(fromKey key: String) -> (path: String, staged: Bool)? {
+        guard let separator = key.firstIndex(of: ":") else { return nil }
+        let side = key[key.startIndex..<separator]
+        guard side == "staged" || side == "worktree" else { return nil }
+        return (String(key[key.index(after: separator)...]), side == "staged")
+    }
+
+    /// Every row the Changes list would show, as selection keys.
+    public var selectionKeys: Set<String> {
+        var keys: Set<String> = []
+        for change in stagedChanges {
+            keys.insert(WorktreeStatus.selectionKey(path: change.path, staged: true))
+        }
+        for change in unstagedChanges + conflicts {
+            keys.insert(WorktreeStatus.selectionKey(path: change.path, staged: false))
+        }
+        return keys
+    }
+
+    /// The change a selection key names, or nil when the row is gone.
+    public func change(forSelectionKey key: String) -> FileChange? {
+        guard selectionKeys.contains(key),
+              let selection = WorktreeStatus.selection(fromKey: key)
+        else { return nil }
+        return changes.first { $0.path == selection.path }
+    }
+
+    /// Where a selection should sit after a refresh.
+    ///
+    /// A row that is still there keeps its key. A path that only moved between the two
+    /// sections — staged elsewhere, or unstaged elsewhere — follows the file rather than
+    /// dropping the selection, which is what the user means by "this file". A path with
+    /// no changes left has nothing to select.
+    public func survivingSelectionKey(for key: String) -> String? {
+        guard let selection = WorktreeStatus.selection(fromKey: key) else { return nil }
+        if selectionKeys.contains(key) { return key }
+        let flipped = WorktreeStatus.selectionKey(path: selection.path, staged: !selection.staged)
+        return selectionKeys.contains(flipped) ? flipped : nil
+    }
+
     /// Counts used by the "cannot remove worktree" warning.
     public var dirtySummary: [String] {
         var parts: [String] = []

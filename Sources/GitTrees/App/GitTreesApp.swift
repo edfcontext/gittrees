@@ -198,6 +198,10 @@ final class AppCommands {
     var commitFocusRequested = false
     var newWindowRequested = false
     var pendingRecent: RecentRepository?
+    /// The path the Changes context menu asked to build an ignore rule for.
+    var ignoreRequest: IgnoreRequest?
+    /// Open the New Worktree sheet already set to carry the current changes across.
+    var branchChangesRequested = false
 
     func openRepository() { openRepositoryRequested = true }
     func newWorktree() { newWorktreeRequested = true }
@@ -208,6 +212,8 @@ final class AppCommands {
     func focusCommitMessage() { commitFocusRequested = true }
     func newWindow() { newWindowRequested = true }
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
+    func ignore(path: String) { ignoreRequest = IgnoreRequest(path: path) }
+    func branchChanges() { branchChangesRequested = true }
 }
 
 /// Menu commands target the key repository window.
@@ -288,6 +294,10 @@ private struct GitTreesCommands: Commands {
             Button("Commit…") { commands?.focusCommitMessage() }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(hasNoWorktree)
+
+            Button("Move Changes to New Worktree…") { commands?.branchChanges() }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(hasNoWorktree || service?.status.isClean != false)
 
             Divider()
 

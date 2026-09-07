@@ -65,6 +65,11 @@ public enum GitError: Error, LocalizedError, Sendable {
     case unexpectedOutput(reason: String, arguments: [String])
     /// A destructive operation was already running against the same worktree.
     case operationInProgress(path: String)
+    /// A transfer of uncommitted changes was asked for in a worktree that has none.
+    case noLocalChanges(path: String)
+    /// A transfer of uncommitted changes could not be finished. Nothing is lost — the
+    /// changes are in the stash commit named here — but the user has to place them.
+    case changesLeftInStash(stash: String, reason: String)
 
     public var errorDescription: String? {
         switch self {
@@ -82,6 +87,10 @@ public enum GitError: Error, LocalizedError, Sendable {
             return "Unexpected output from git: \(reason)"
         case .operationInProgress(let path):
             return "Another operation is already running in \(path)."
+        case .noLocalChanges(let path):
+            return "There are no uncommitted changes in \(path) to move."
+        case .changesLeftInStash(let stash, let reason):
+            return "\(reason)\n\nNothing was lost: the changes are in stash \(String(stash.prefix(7)))."
         }
     }
 
@@ -104,6 +113,8 @@ public enum GitError: Error, LocalizedError, Sendable {
             return "Choose a directory that is inside a Git repository."
         case .couldNotCreateDirectory:
             return "Choose a different folder name, or a parent directory you can write to."
+        case .changesLeftInStash(let stash, _):
+            return "Recover them with: git stash apply \(String(stash.prefix(7)))"
         default:
             return nil
         }

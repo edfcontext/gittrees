@@ -89,7 +89,7 @@ struct PreferencesServiceTests {
         #expect(!preferences.hasCustomWorktreeRoot(for: repository))
         #expect(
             preferences.worktreeRoot(for: repository).path
-                == "/Users/me/Development/nalcus/worktrees/summit"
+                == "/Users/me/Development/nalcus/.worktrees"
         )
     }
 

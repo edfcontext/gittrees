@@ -18,6 +18,9 @@ struct NewWorktreeSheet: View {
 
     /// Pre-selects the branch the user right-clicked in the sidebar.
     let preselectedBranch: String?
+    /// Opens with the current worktree's uncommitted changes already set to move across,
+    /// which is how "Move Changes to New Worktree…" enters the sheet.
+    var movingChanges: Bool = false
 
     @State private var mode: Mode = .new
     @State private var existingBranch: String = ""
@@ -27,6 +30,8 @@ struct NewWorktreeSheet: View {
     /// Once the user edits the path by hand, it stops following the branch name.
     @State private var locationEdited = false
     @State private var openInEditor = false
+    @State private var uncommittedChanges: NewWorktreeRequest.UncommittedChanges = .leave
+    @State private var ignoreWorktreeRoot = true
     @State private var choosingLocation = false
     @State private var isCreating = false
 
@@ -39,6 +44,7 @@ struct NewWorktreeSheet: View {
                 branchSection
                 if mode == .new { basedOnSection }
                 locationSection
+                if !service.status.isClean, service.selectedWorktree != nil { changesSection }
                 optionsSection
             }
             .formStyle(.grouped)
@@ -162,10 +168,48 @@ struct NewWorktreeSheet: View {
         }
     }
 
+    /// Offers to carry the current worktree's uncommitted work into the new one.
+    ///
+    /// This is the shape of the thing people actually do by hand — start editing in the
+    /// worktree that happens to be open, realise it wants its own branch, then juggle a
+    /// stash to get it there. Doing it here keeps the staged/unstaged split and the
+    /// untracked files intact, which the by-hand version usually loses.
+    @ViewBuilder
+    private var changesSection: some View {
+        Section("Uncommitted Changes") {
+            if let source = service.selectedWorktree {
+                Text("\(summary) in \(source.displayName).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: $uncommittedChanges) {
+                    Text("Leave them where they are").tag(NewWorktreeRequest.UncommittedChanges.leave)
+                    Text("Move them to the new worktree").tag(NewWorktreeRequest.UncommittedChanges.move)
+                    Text("Copy them to the new worktree").tag(NewWorktreeRequest.UncommittedChanges.copy)
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+
+                if let warning = transferWarning {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
     private var optionsSection: some View {
         Section {
             Toggle("Open in \(preferences.preferredEditor.displayName) after creation", isOn: $openInEditor)
                 .disabled(!launcher.isInstalled(preferences.preferredEditor))
+
+            if let rule = worktreeRootRule {
+                Toggle("Add “\(rule)” to \(Gitignore.Destination.local.displayName)", isOn: $ignoreWorktreeRoot)
+                Text(ignoreRuleExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -173,7 +217,7 @@ struct NewWorktreeSheet: View {
         HStack(spacing: 10) {
             if isCreating {
                 ProgressView().controlSize(.small)
-                Text("Running git worktree add…")
+                Text(uncommittedChanges == .leave ? "Running git worktree add…" : "Moving your changes across…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -205,6 +249,56 @@ struct NewWorktreeSheet: View {
         let locals = service.localBranches.map(\.name)
         let remotes = preferences.showRemoteBranches ? service.remoteBranches.map(\.name) : []
         return locals + remotes
+    }
+
+    /// The rule that would keep the worktree root out of `git status`, or nil when there
+    /// is nothing to offer — no repository, or the rule is already in the file.
+    ///
+    /// The pattern follows the root's own directory name rather than a fixed string, so a
+    /// repository pointed at a differently named root gets a rule that matches it.
+    private var worktreeRootRule: String? {
+        guard let repository = service.repository else { return nil }
+        let name = preferences.worktreeRoot(for: repository).lastPathComponent
+        guard !name.isEmpty else { return nil }
+        let rule = Gitignore.pattern(forDirectoryNamed: name)
+        guard !service.hasIgnoreRule(pattern: rule, destination: .local) else { return nil }
+        return rule
+    }
+
+    /// A root beside the repository is outside the work tree, so the rule changes nothing
+    /// today — it is worth saying so rather than implying an effect it does not have.
+    private var ignoreRuleExplanation: String {
+        guard let repository = service.repository else { return "" }
+        let root = preferences.worktreeRoot(for: repository).standardizedFileURL.path + "/"
+        let inside = root.hasPrefix(repository.mainWorktreePath.standardizedFileURL.path + "/")
+        return inside
+            ? "The worktree root is inside the repository, so Git would otherwise report every worktree in it as untracked."
+            : "The worktree root sits beside the repository, where Git cannot see it. The rule costs nothing and covers a root moved inside later."
+    }
+
+    /// "2 modified files and 1 untracked file", from the same counts the removal warning uses.
+    private var summary: String {
+        let parts = service.status.dirtySummary
+        guard !parts.isEmpty else { return "Uncommitted changes" }
+        guard parts.count > 1 else { return parts[0].prefix(1).uppercased() + parts[0].dropFirst() }
+        let head = parts.dropLast().joined(separator: ", ")
+        let joined = "\(head) and \(parts[parts.count - 1])"
+        return joined.prefix(1).uppercased() + joined.dropFirst()
+    }
+
+    /// Warns when the new worktree would not start where the changes came from.
+    ///
+    /// Applying them is a merge, so a different starting commit can conflict. Nothing is
+    /// lost when it does — the changes stay in a stash GitTrees names — but it is worth
+    /// saying before rather than after.
+    private var transferWarning: String? {
+        guard uncommittedChanges != .leave else { return nil }
+        guard let current = service.selectedWorktree?.branchName else {
+            return "This worktree has a detached HEAD, so the changes may not apply cleanly to the branch you picked."
+        }
+        let base = mode == .existing ? existingBranch : startPoint
+        guard base != current else { return nil }
+        return "The new worktree starts at \(base) rather than \(current), so the changes may not apply cleanly. If they don't, they are left in a stash and nothing is lost."
     }
 
     private var chosenBranchName: String {
@@ -242,6 +336,7 @@ struct NewWorktreeSheet: View {
 
     private func configureInitialState() {
         openInEditor = preferences.openInEditorAfterCreate
+        if movingChanges, !service.status.isClean { uncommittedChanges = .move }
 
         if let preselectedBranch, service.branches.contains(where: { $0.name == preselectedBranch }) {
             // A branch that exists but has no worktree is exactly the "existing branch"
@@ -304,7 +399,9 @@ struct NewWorktreeSheet: View {
                     startPoint: startPoint
                 ),
             path: expandedLocation,
-            openInEditor: openInEditor
+            openInEditor: openInEditor,
+            uncommittedChanges: service.status.isClean ? .leave : uncommittedChanges,
+            ignoreRule: ignoreWorktreeRoot ? worktreeRootRule : nil
         )
         preferences.openInEditorAfterCreate = openInEditor
 

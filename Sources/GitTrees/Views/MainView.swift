@@ -23,12 +23,17 @@ struct MainView: View {
     @State private var hasRestored = false
 
     var body: some View {
-        @Bindable var service = service
+        relayedCommands
+    }
 
+    // The window is assembled in layers rather than one chain: the split view, its
+    // modals, and the menu-command relays together exceed what the type checker will
+    // infer in a single expression.
+    private var window: some View {
         NavigationSplitView {
             RepositorySidebar(
                 selection: $selection,
-                onNewWorktree: { activeSheet = .newWorktree },
+                onNewWorktree: { activeSheet = .newWorktree(movingChanges: false) },
                 onNewWorkspace: { activeSheet = .newWorkspace },
                 onOpenRepository: { showingOpenPanel = true },
                 onRequestRemoval: { requestRemoval(of: $0) },
@@ -67,6 +72,10 @@ struct MainView: View {
                 selection = .worktree(newValue)
             }
         }
+    }
+
+    private var modals: some View {
+        window
         .fileImporter(
             isPresented: $showingOpenPanel,
             allowedContentTypes: [.folder],
@@ -76,8 +85,11 @@ struct MainView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
-            case .newWorktree:
-                NewWorktreeSheet(preselectedBranch: preselectedBranchForSheet)
+            case .newWorktree(let movingChanges):
+                NewWorktreeSheet(
+                    preselectedBranch: preselectedBranchForSheet,
+                    movingChanges: movingChanges
+                )
             case .newWorkspace:
                 NewWorkspaceSheet()
             case .removeWorktree(let removal):
@@ -88,6 +100,8 @@ struct MainView: View {
                 AddRemoteSheet()
             case .createPullRequest:
                 CreatePullRequestSheet()
+            case .ignore(let request):
+                IgnoreSheet(path: request.path)
             }
         }
         .alert(
@@ -102,13 +116,18 @@ struct MainView: View {
         } message: { error in
             Text(errorBody(error))
         }
-        // Menu-bar commands are relayed through AppCommands.
+    }
+
+    /// Menu-bar commands are relayed through `AppCommands`: the menu items live in the
+    /// `App` scene, the sheets they open live here.
+    private var repositoryCommands: some View {
+        modals
         .onChange(of: commands.openRepositoryRequested) { _, requested in
             if requested { showingOpenPanel = true; commands.openRepositoryRequested = false }
         }
         .onChange(of: commands.newWorktreeRequested) { _, requested in
             if requested {
-                if service.repository != nil { activeSheet = .newWorktree }
+                if service.repository != nil { activeSheet = .newWorktree(movingChanges: false) }
                 commands.newWorktreeRequested = false
             }
         }
@@ -123,6 +142,10 @@ struct MainView: View {
             commands.pendingRecent = nil
             Task { await openRepository(at: recent.path) }
         }
+    }
+
+    private var relayedCommands: some View {
+        repositoryCommands
         .onChange(of: commands.addRemoteRequested) { _, requested in
             if requested {
                 if service.repository != nil { activeSheet = .addRemote }
@@ -140,6 +163,16 @@ struct MainView: View {
             commands.openInEditorRequested = false
             guard let worktree = service.selectedWorktree else { return }
             Task { await openWorktree(worktree, in: preferences.preferredEditor) }
+        }
+        .onChange(of: commands.branchChangesRequested) { _, requested in
+            guard requested else { return }
+            commands.branchChangesRequested = false
+            if service.selectedWorktree != nil { activeSheet = .newWorktree(movingChanges: true) }
+        }
+        .onChange(of: commands.ignoreRequest) { _, request in
+            guard let request else { return }
+            commands.ignoreRequest = nil
+            activeSheet = .ignore(request)
         }
         .onChange(of: commands.newWindowRequested) { _, requested in
             guard requested else { return }
@@ -169,7 +202,7 @@ struct MainView: View {
                   let branch = service.branches.first(where: { $0.refName == ref }) {
             InactiveBranchView(
                 branch: branch,
-                onCreateWorktree: { activeSheet = .newWorktree }
+                onCreateWorktree: { activeSheet = .newWorktree(movingChanges: false) }
             )
         } else {
             ContentUnavailableView(
@@ -209,7 +242,7 @@ struct MainView: View {
             .disabled(service.repository == nil)
 
             Button {
-                activeSheet = .newWorktree
+                activeSheet = .newWorktree(movingChanges: false)
             } label: {
                 Label("New Worktree", systemImage: "plus.rectangle.on.rectangle")
             }
@@ -311,21 +344,23 @@ struct MainView: View {
 /// SwiftUI presents only one of several `.sheet` modifiers attached to the same view,
 /// so every modal goes through a single presenter rather than one modifier each.
 enum ActiveSheet: Identifiable {
-    case newWorktree
+    case newWorktree(movingChanges: Bool)
     case newWorkspace
     case removeWorktree(WorktreeRemoval)
     case lockWorktree(Worktree)
     case addRemote
     case createPullRequest
+    case ignore(IgnoreRequest)
 
     var id: String {
         switch self {
-        case .newWorktree: "new-worktree"
+        case .newWorktree(let movingChanges): "new-worktree-\(movingChanges)"
         case .newWorkspace: "new-workspace"
         case .removeWorktree(let removal): "remove-\(removal.id)"
         case .lockWorktree(let worktree): "lock-\(worktree.id)"
         case .addRemote: "add-remote"
         case .createPullRequest: "create-pull-request"
+        case .ignore(let request): "ignore-\(request.id)"
         }
     }
 }

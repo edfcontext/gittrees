@@ -106,6 +106,7 @@ struct WorktreeRow: View {
 struct WorktreeContextMenu: View {
     @Environment(RepositoryService.self) private var service
     @Environment(WorkspaceLauncher.self) private var launcher
+    @Environment(AppCommands.self) private var commands
 
     let worktree: Worktree
     let onRequestRemoval: (Worktree) -> Void
@@ -133,6 +134,18 @@ struct WorktreeContextMenu: View {
         Button("Push") { run { await service.push(setUpstream: service.selectedBranchNeedsUpstream) } }
 
         Divider()
+
+        // Only offered for a worktree Git has something to move: the sidebar's dirty
+        // scan is the same signal the row's indicator uses.
+        if service.dirtyStates[worktree.id] == true, !worktree.isMissingOnDisk {
+            Button("Move Changes to New Worktree…") {
+                service.selectedWorktreePath = worktree.id
+                commands.branchChanges()
+            }
+            .disabled(service.isBusy(worktree))
+
+            Divider()
+        }
 
         if worktree.isLocked {
             Button("Unlock Worktree") {

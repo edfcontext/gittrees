@@ -64,7 +64,7 @@ struct DiffView: View {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 }
             } else {
-                Text("Diff")
+                Text(selectionCount > 1 ? "\(selectionCount) Files Selected" : "Diff")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -75,9 +75,20 @@ struct DiffView: View {
         .background(GitTreesUI.barBackground)
     }
 
+    /// Rows selected in Changes. More than one means there is no single diff to show.
+    private var selectionCount: Int { service.selectedFileKeys.count }
+
     @ViewBuilder
     private var content: some View {
-        if service.selectedFile == nil {
+        if selectionCount > 1 {
+            // A diff of one arbitrary file out of several would be worse than none: the
+            // header would name a file the user did not single out.
+            ContentUnavailableView(
+                "\(selectionCount) Files Selected",
+                systemImage: "doc.on.doc",
+                description: Text("Right-click to stage, unstage or ignore them together, or select one file to see its diff.")
+            )
+        } else if service.selectedFile == nil {
             ContentUnavailableView(
                 "No File Selected",
                 systemImage: "doc.text",

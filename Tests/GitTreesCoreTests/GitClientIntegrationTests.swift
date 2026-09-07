@@ -34,6 +34,12 @@ struct GitClientIntegrationTests {
             try await git(["config", "user.email", "tests@example.com"])
             try await git(["config", "user.name", "GitTrees Tests"])
             try await git(["config", "commit.gpgsign", "false"])
+            // `GitClient` runs with the developer's real environment, so their global
+            // excludes would otherwise decide which fixture paths count as untracked.
+            // A repository-local override is the one setting that reaches every caller.
+            let excludes = root.appendingPathComponent("empty-excludes", isDirectory: false)
+            try "".write(to: excludes, atomically: true, encoding: .utf8)
+            try await git(["config", "core.excludesFile", excludes.path])
 
             try write("hello\n", to: "README.md")
             try write("a\n", to: "src/a.txt")
@@ -705,6 +711,153 @@ struct GitClientIntegrationTests {
             encoding: .utf8
         )
         #expect(gitignore.contains("/docs/new note.md"))
+    }
+
+    @Test("a local exclude written to the common git dir hides a path in every worktree")
+    func localExcludeAppliesToLinkedWorktrees() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        let linked = fixture.worktreeRoot("side work")
+        try await fixture.client.createWorktree(
+            repository: fixture.repository,
+            path: linked,
+            newBranch: "feature/side",
+            startingAt: "main"
+        )
+        try fixture.write("noise\n", to: "build/out.o", in: linked)
+
+        let repository = try await fixture.client.discoverRepository(at: linked)
+        let exclude = Gitignore.fileURL(
+            for: .local,
+            worktree: linked,
+            commonGitDir: repository.commonGitDir
+        )
+        // The rule goes in the shared git directory, not the linked worktree's own one:
+        // Git never reads `.git/worktrees/<name>/info/exclude`.
+        #expect(exclude.path.hasSuffix(".git/info/exclude"))
+        #expect(try Gitignore.append(pattern: Gitignore.pattern(forDirectory: "build"), to: exclude))
+
+        let status = try await fixture.client.statusSummary(worktree: linked)
+        #expect(!status.changes.contains { $0.path.hasPrefix("build/") })
+        // Nothing was added to the worktree itself, so there is no .gitignore to commit.
+        #expect(!FileManager.default.fileExists(atPath: linked.appendingPathComponent(".gitignore").path))
+    }
+
+    @Test("an ignore rule can be previewed against the untracked paths it would hide")
+    func previewIgnorePattern() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("x\n", to: "build/out.o")
+        try fixture.write("y\n", to: "build/nested/deep.o")
+        try fixture.write("log\n", to: "run.log")
+        try fixture.write("keep\n", to: "docs/note.md")
+
+        let folder = try await client.pathsHidden(
+            byIgnorePattern: Gitignore.pattern(forDirectory: "build"),
+            worktree: fixture.repository
+        )
+        #expect(folder.sorted() == ["build/nested/deep.o", "build/out.o"])
+
+        let extensions = try await client.pathsHidden(
+            byIgnorePattern: "*.log",
+            worktree: fixture.repository
+        )
+        #expect(extensions == ["run.log"])
+
+        // A rule that catches nothing says so, rather than reporting the whole list.
+        let nothing = try await client.pathsHidden(
+            byIgnorePattern: "/no-such-thing/",
+            worktree: fixture.repository
+        )
+        #expect(nothing.isEmpty)
+    }
+
+    @Test("the preview does not write anything to the worktree")
+    func previewIgnoreLeavesNoTrace() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        try fixture.write("x\n", to: "build/out.o")
+        _ = try await fixture.client.pathsHidden(
+            byIgnorePattern: "/build/",
+            worktree: fixture.repository
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.repository.appendingPathComponent(".gitignore").path))
+        let status = try await fixture.client.statusSummary(worktree: fixture.repository)
+        #expect(status.changes.map(\.path) == ["build/out.o"])
+    }
+
+    // MARK: - Moving changes into a worktree
+
+    @Test("a stash round trip carries staged, unstaged and untracked work into a new worktree")
+    func stashMovesChangesToNewWorktree() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nunstaged\n", to: "README.md")
+        try fixture.write("a\nstaged\n", to: "src/a.txt")
+        try await client.stage(worktree: fixture.repository, paths: ["src/a.txt"])
+        try fixture.write("new\n", to: "notes/todo.md")
+
+        let head = try await client.headCommit(worktree: fixture.repository)
+        let stash = try await client.stashPush(worktree: fixture.repository, message: "GitTrees: feature/moved")
+        let commit = try #require(stash)
+
+        // The source worktree is left clean — this is a move, not a copy.
+        #expect(try await client.statusSummary(worktree: fixture.repository).isClean)
+
+        let destination = fixture.worktreeRoot("moved work")
+        try await client.createWorktree(
+            repository: fixture.repository,
+            path: destination,
+            newBranch: "feature/moved",
+            startingAt: try #require(head)
+        )
+        try await client.stashApply(worktree: destination, stash: commit, restoringIndex: true)
+
+        let status = try await client.statusSummary(worktree: destination)
+        // The staged/unstaged split survives the transfer, which a patch file would lose.
+        #expect(status.stagedChanges.map(\.path) == ["src/a.txt"])
+        #expect(status.unstagedChanges.map(\.path).sorted() == ["README.md", "notes/todo.md"])
+        #expect(status.changes.contains { $0.path == "notes/todo.md" && $0.kind == .untracked })
+
+        let selector = try await client.stashSelector(repository: fixture.repository, forCommit: commit)
+        #expect(selector == "stash@{0}")
+        try await client.stashDrop(repository: fixture.repository, selector: try #require(selector))
+        #expect(try await client.stashSelector(repository: fixture.repository, forCommit: commit) == nil)
+    }
+
+    @Test("stashing a clean worktree reports that there was nothing to move")
+    func stashPushWithNothingToStash() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        // Git prints "No local changes to save" and exits zero, so the only usable
+        // signal is that refs/stash did not move.
+        let stash = try await fixture.client.stashPush(worktree: fixture.repository, message: "nothing")
+        #expect(stash == nil)
+    }
+
+    @Test("a stash selector is resolved by commit, not by position in the stack")
+    func stashSelectorFollowsTheCommit() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nfirst\n", to: "README.md")
+        let first = try #require(try await client.stashPush(worktree: fixture.repository, message: "first"))
+        try fixture.write("hello\nsecond\n", to: "README.md")
+        let second = try #require(try await client.stashPush(worktree: fixture.repository, message: "second"))
+
+        // The newer entry pushed the older one down the stack; addressing by commit is
+        // what keeps a drop from taking the wrong one.
+        #expect(try await client.stashSelector(repository: fixture.repository, forCommit: second) == "stash@{0}")
+        #expect(try await client.stashSelector(repository: fixture.repository, forCommit: first) == "stash@{1}")
     }
 
     @Test("staging and unstaging a file moves it between the two lists")

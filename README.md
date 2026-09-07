@@ -64,8 +64,10 @@ behave exactly as they do on the command line.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
-  unified diff (working tree or index), and a commit editor. Right-click an untracked
-  file to add it (or its folder) to this worktree's `.gitignore`. Status reloads when the
+  unified diff (working tree or index), and a commit editor. Rows multi-select with the
+  ordinary ⌘-click and ⇧-click, and the context menu acts on everything selected — see
+  below. Right-click an untracked file to add it (or its folder) to this worktree's
+  `.gitignore`, or open **Ignore…** for the rest. Status reloads when the
   window becomes key (returning from an IDE) as well as after GitTrees operations and
   ⌘R.
 - **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
@@ -77,6 +79,78 @@ behave exactly as they do on the command line.
   GitHub CLI (`gh pr create`), and see the one already open for it. See below.
 - **Workspace** — open a worktree in Finder, Terminal, IntelliJ IDEA, VS Code or Cursor
   via `NSWorkspace`; the preferred IDE is stored in Settings.
+
+### Selecting changes
+
+The file list is a normal macOS multiple selection: ⌘-click adds and removes rows,
+⇧-click extends a range, and the range can cross the Staged and Changes sections.
+Right-clicking inside the selection acts on all of it and right-clicking a row outside it
+acts on that row alone, leaving the selection untouched. Stage, unstage, ignore and copy
+all take however many rows are selected, in one Git invocation and one refresh, and the
+menu says how many.
+
+The diff pane shows a diff only for a single selected file; with several selected it says
+so rather than showing an arbitrary one of them.
+
+A selection survives a refresh, and follows a file that moves between the two sections —
+staging four files keeps the same four rows selected, now in Staged. A path with no
+changes left drops out of the selection.
+
+Two details of the identity this rests on are worth stating, because both are easy to get
+wrong. A partially staged file is *two* rows showing different diffs, so a row is
+identified by its path **and** which side of the index it is on — identifying rows by the
+file alone gives the list two rows with one identity and it then highlights whichever it
+likes. And clicking a row that is already part of a multiple selection does not collapse
+the selection onto it: SwiftUI's `List` has no equivalent of AppKit's mouse-up rule, and
+the obvious fix — a tap gesture on the row — races the List's own click handling and
+breaks plain clicking altogether. Click a row outside the selection, or ⌘-click, to get
+back to one file.
+
+### Ignore rules
+
+The context menu on an untracked file can only guess: the file itself, or the one folder
+directly above it. **Ignore…** opens a sheet for everything else — and shows what the
+rule would hide before it is written.
+
+- **Which rule.** The file, any folder on its path (`src/generated/api`, `src/generated`,
+  `src`, chosen from a menu), that folder *wherever it appears* (`node_modules/` rather
+  than `/app/vendor/node_modules/`), every file with the same extension, every file with
+  the same name, or a pattern typed by hand.
+- **Which file.** `.gitignore` is tracked, so a rule written there is committed and
+  reaches everyone who clones the repository. `.git/info/exclude` never leaves the
+  machine — the right place for a scratch directory or an editor's droppings that only
+  you have. Git reads `info/exclude` from the *shared* git directory, so a local rule
+  applies to every worktree of the repository; a file placed in a linked worktree's own
+  `.git/worktrees/<name>/info/exclude` is simply never read.
+- **What it catches.** The sheet lists the untracked files the rule would hide, and says
+  so when it would hide none. Rather than reimplementing Git's matching — anchoring,
+  `**`, character classes, directory-only rules — it asks Git for the untracked list
+  twice, once with the candidate rule added, and reports the difference. Nothing is
+  written to the worktree to do it.
+
+Glob metacharacters in a path are escaped, so a file called `file[1].txt` is matched
+literally, and a name starting with `#` or `!` is escaped when the pattern is unanchored
+and those characters would start a comment or a negation.
+
+### Moving changes into a worktree
+
+Work usually starts in whichever worktree is already open, and only then turns out to
+want a branch of its own. **Move Changes to New Worktree…** (⇧⌘M, the Repository menu, or
+a worktree's context menu) creates the branch and worktree and carries the uncommitted
+work across — *Move* empties the source worktree, *Copy* leaves it as it was. The option
+also appears in the New Worktree sheet whenever the current worktree is dirty.
+
+The transfer goes through the stash, because it is the only mechanism that reproduces the
+whole working state: staged and unstaged changes kept apart, and untracked files
+included. The order is deliberate — stash, create the worktree, apply, and only then drop
+the stash entry:
+
+- If the worktree cannot be created, the changes are put straight back and the stash
+  entry is dropped, leaving the source exactly as it was.
+- If they cannot be applied, the entry is **not** dropped and the error names the stash
+  commit that still holds them.
+- The new branch starts at the source worktree's own commit by default, which is the
+  start point that cannot conflict. Choosing another is allowed, with a warning.
 
 ### Safe removal
 
@@ -118,18 +192,31 @@ because with several worktrees open that is easy to get wrong. Your global
 
 ### New worktree paths
 
-New worktrees are suggested under a per-repository worktree root, with conventional
-prefixes (`feature/`, `bugfix/`, `fix/`, `chore/`, …) stripped from the directory name:
+New worktrees are suggested under a `.worktrees` directory beside the repository, with
+conventional prefixes (`feature/`, `bugfix/`, `fix/`, `chore/`, …) stripped from the
+directory name:
 
 ```
 Repository:    ~/Development/nalcus/summit
-Worktree root: ~/Development/nalcus/worktrees/summit
+Worktree root: ~/Development/nalcus/.worktrees
 Branch:        feature/zpl-templates
-Suggested:     ~/Development/nalcus/worktrees/summit/zpl-templates
+Suggested:     ~/Development/nalcus/.worktrees/zpl-templates
 ```
+
+The repository name is not a level of its own: repositories sharing a parent share the
+`.worktrees` directory, and the branch directory inside it is what names the checkout.
 
 The suggestion updates as you type and can be overridden; the root is configurable per
 repository on the Repository tab.
+
+The New Worktree sheet also offers, checked by default, to add the root's directory name
+(`.worktrees/`) to `.git/info/exclude` — written only if the worktree is really created,
+and only when that line is not already in the file, so the checkbox disappears once it
+is. The rule follows whatever the root is actually called, so a repository pointed at a
+differently named root gets a rule that matches it. With the default root, which sits
+beside the repository and outside its work tree, the rule changes nothing today; it
+covers a root configured inside the repository, where Git would otherwise report every
+worktree in it as untracked. The sheet says which of the two applies.
 
 ### Pull requests (GitHub CLI)
 
@@ -163,7 +250,9 @@ where gh's own interactive flow belongs; GitTrees never runs interactive gh comm
 GitLab integration, issue tracking, PR review and merge (only *creating* a pull request
 is supported, via the GitHub CLI), interactive rebase, merge editor,
 hunk or line staging, submodules, LFS, SSH keys, credential UI, cloning, signing
-configuration, bisect, reflog, stash, blame, tags, and commit-graph rendering. The
+configuration, bisect, reflog, blame, tags, and commit-graph rendering. There is no stash
+*interface* either — no list, no manual push and pop; the stash is used internally, as
+the transport that moves uncommitted changes into a new worktree. The
 architecture leaves room for these; the scope deliberately does not include them.
 
 ## Building
@@ -203,7 +292,8 @@ Sources/
     Views/               MainView, RepositorySidebar, WorktreeList, BranchList,
                          WorktreeDetailView, ChangesView, DiffView, CommitView,
                          HistoryView, BranchInfoView, NewWorktreeSheet,
-                         NewWorkspaceSheet, RemoveWorktreeSheet, PreferencesView
+                         NewWorkspaceSheet, RemoveWorktreeSheet, IgnoreSheet,
+                         PreferencesView
 Tests/GitTreesCoreTests/
 ```
 
@@ -211,6 +301,9 @@ Tests/GitTreesCoreTests/
 
 Two layers:
 
+- **Selection suite** covers the identity the Changes list selects by: a partially staged
+  file as two rows, conflicted and untracked entries on the working-tree side only, and a
+  selection following a file across the index or dropping out when the path is committed.
 - **Parser suites** run against fixtures captured verbatim from real repositories
   (`git worktree list --porcelain -z | tr '\0' '|'`), covering the main worktree,
   linked worktrees, detached/locked/prunable state, paths with spaces, non-ASCII branch
@@ -221,7 +314,9 @@ Two layers:
   folder with existing content, creating a new workspace folder with `git init` and a
   remote, worktree lifecycle,
   branch-already-checked-out refusal, switching the main worktree's branch, pruning, staging on an unborn HEAD, diffs, commits,
-  ignoring an untracked path via `.gitignore`,
+  ignoring an untracked path via `.gitignore`, a local exclude proving Git reads it from
+  the shared git directory, previewing a rule without writing anything, and the stash
+  round trip that carries staged, unstaged and untracked work into a new worktree,
   inspecting a commit's files and patch (including the root commit and a rename),
   hook enforcement, merge conflicts, the dirty-removal guard, identity round-trips across
   linked worktrees, adding remotes, publishing a branch to a remote that is deliberately
@@ -229,6 +324,12 @@ Two layers:
   The GitHub CLI layer is covered by a mock runner (exact `gh` argument vectors, and
   decoding gh's real `pr view --json` payload) plus, where gh is installed, live checks
   that `auth` and a `pr view` lookup behave and never crash.
+- **Service suite** drives `RepositoryService` itself against real repositories, for the
+  creation paths that are a sequence rather than a command: moving changes into a worktree
+  stashes, creates, applies and drops, and the ordering is the whole safety story. It
+  covers the move, the copy, the plain creation that leaves the changes alone, the
+  failure that has to put them back, and the worktree-root ignore rule — written once,
+  and not at all when the worktree was never created.
 
 ## Notes
 

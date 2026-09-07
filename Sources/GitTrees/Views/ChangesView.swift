@@ -27,14 +27,15 @@ struct ChangesView: View {
 /// Dense file list, split into conflicts, staged and unstaged sections.
 struct FileChangeList: View {
     @Environment(RepositoryService.self) private var service
+    @Environment(AppCommands.self) private var commands
+
+    /// The List drives its own `@State` rather than a binding computed from the service.
+    /// A computed binding works for the modifier-click gestures but leaves a plain click
+    /// unable to reduce the selection, so the two are kept in step explicitly instead.
+    @State private var selection: Set<String> = []
 
     var body: some View {
-        @Bindable var service = service
-
-        List(selection: Binding(
-            get: { selectionKey },
-            set: { applySelection($0) }
-        )) {
+        List(selection: $selection) {
             if !service.status.conflicts.isEmpty {
                 section(
                     title: "Conflicts",
@@ -60,6 +61,22 @@ struct FileChangeList: View {
         }
         .listStyle(.inset)
         .environment(\.defaultMinListRowHeight, 20)
+        // Right-clicking inside the selection acts on all of it; right-clicking a row
+        // outside acts on that row alone, without disturbing the selection. Getting that
+        // from the List rather than from a per-row menu is what makes it behave the way
+        // every other macOS list does.
+        .contextMenu(forSelectionType: String.self) { keys in
+            contextMenu(for: keys)
+        }
+        .onChange(of: selection) { _, keys in
+            service.selectedFileKeys = keys
+            service.focusSelectedFile(resettingSide: true)
+        }
+        // The service prunes the selection when status is reread and empties it when the
+        // worktree changes; both have to reach the list.
+        .onChange(of: service.selectedFileKeys) { _, keys in
+            if keys != selection { selection = keys }
+        }
         .overlay {
             if service.status.isClean {
                 Text("No local changes")
@@ -74,14 +91,26 @@ struct FileChangeList: View {
         case unstage
     }
 
+    /// One row of the list: a change, plus which side of the index it is shown for.
+    ///
+    /// The pair is the identity. A partially staged file is the *same* `FileChange` in
+    /// both the Staged and Changes sections, so identifying rows by the change alone
+    /// gives the List two rows with one identity — and it then highlights whichever row
+    /// it likes rather than the one that was clicked.
+    private struct Row: Identifiable {
+        let change: FileChange
+        let staged: Bool
+
+        var id: String { WorktreeStatus.selectionKey(path: change.path, staged: staged) }
+    }
+
     @ViewBuilder
     private func section(title: String, changes: [FileChange], staged: Bool, action: RowAction?) -> some View {
         if !changes.isEmpty {
             Section {
-                ForEach(changes) { change in
-                    FileChangeRow(change: change, staged: staged)
-                        .tag(key(for: change, staged: staged))
-                        .contextMenu { contextMenu(for: change, action: action) }
+                ForEach(changes.map { Row(change: $0, staged: staged) }) { row in
+                    FileChangeRow(change: row.change, staged: row.staged)
+                        .tag(row.id)
                 }
             } header: {
                 HStack(spacing: 4) {
@@ -104,55 +133,79 @@ struct FileChangeList: View {
         }
     }
 
+    // MARK: - Context menu
+
+    /// One menu for however many rows the click covers, so a single selection reads
+    /// exactly as it did before and a multiple selection says how many it will act on.
     @ViewBuilder
-    private func contextMenu(for change: FileChange, action: RowAction?) -> some View {
-        switch action {
-        case .stage:
-            Button("Stage File") { Task { await service.stage([change]) } }
-            if change.kind == .untracked {
-                Divider()
-                Button("Add to .gitignore") { Task { await service.ignore(change) } }
-                if !change.directory.isEmpty {
-                    Button("Ignore Folder “\(change.directory)”") {
-                        Task { await service.ignoreDirectory(of: change) }
+    private func contextMenu(for keys: Set<String>) -> some View {
+        let rows = self.rows(for: keys)
+        let toStage = rows.filter { !$0.staged }.map(\.change)
+        let toUnstage = rows.filter(\.staged).map(\.change)
+        let untracked = rows.map(\.change).filter { $0.kind == .untracked }
+
+        if !toStage.isEmpty {
+            Button(stageTitle(for: toStage)) { Task { await service.stage(toStage) } }
+        }
+        if !toUnstage.isEmpty {
+            Button(count(toUnstage, one: "Unstage File", many: "Unstage %d Files")) {
+                Task { await service.unstage(toUnstage) }
+            }
+        }
+
+        // Ignoring only makes sense for paths Git is not already tracking, so the items
+        // appear only when every selected row is untracked.
+        if !untracked.isEmpty, untracked.count == rows.count {
+            Divider()
+            Button(count(untracked, one: "Add to .gitignore", many: "Add %d Files to .gitignore")) {
+                Task { await service.ignore(untracked) }
+            }
+            if let only = untracked.first, untracked.count == 1 {
+                if !only.directory.isEmpty {
+                    Button("Ignore Folder “\(only.directory)”") {
+                        Task { await service.ignoreDirectory(of: only) }
                     }
                 }
+                Button("Ignore…") { commands.ignore(path: only.path) }
             }
-        case .unstage:
-            Button("Unstage File") { Task { await service.unstage([change]) } }
-        case nil:
-            Button("Stage Resolved File") { Task { await service.stage([change]) } }
         }
-        Divider()
-        Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(change.path, forType: .string)
+
+        if !rows.isEmpty {
+            Divider()
+            Button(count(rows.map(\.change), one: "Copy Path", many: "Copy %d Paths")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(
+                    rows.map(\.change.path).joined(separator: "\n"),
+                    forType: .string
+                )
+            }
         }
+    }
+
+    /// A conflicted file is staged to mark it resolved, which is worth saying.
+    private func stageTitle(for changes: [FileChange]) -> String {
+        guard changes.allSatisfy(\.isConflicted) else {
+            return count(changes, one: "Stage File", many: "Stage %d Files")
+        }
+        return count(changes, one: "Stage Resolved File", many: "Stage %d Resolved Files")
+    }
+
+    private func count(_ changes: [FileChange], one: String, many: String) -> String {
+        changes.count == 1 ? one : String(format: many, changes.count)
     }
 
     // MARK: - Selection
 
-    /// The list selects a (path, side-of-index) pair, because the same file can appear
-    /// in both the staged and unstaged sections with different diffs.
-    private func key(for change: FileChange, staged: Bool) -> String {
-        "\(staged ? "staged" : "worktree"):\(change.path)"
+    /// The rows a set of selection keys names, in the order the list shows them, so the
+    /// menu's counts and the pasteboard match what is on screen.
+    private func rows(for keys: Set<String>) -> [Row] {
+        let ordered =
+            service.status.conflicts.map { Row(change: $0, staged: false) }
+            + service.status.stagedChanges.map { Row(change: $0, staged: true) }
+            + service.status.unstagedChanges.map { Row(change: $0, staged: false) }
+        return ordered.filter { keys.contains($0.id) }
     }
 
-    private var selectionKey: String? {
-        guard let file = service.selectedFile else { return nil }
-        return key(for: file, staged: service.showingStagedDiff)
-    }
-
-    private func applySelection(_ newValue: String?) {
-        guard let newValue, let separator = newValue.firstIndex(of: ":") else {
-            service.selectedFile = nil
-            return
-        }
-        let staged = newValue[newValue.startIndex..<separator] == "staged"
-        let path = String(newValue[newValue.index(after: separator)...])
-        service.showingStagedDiff = staged
-        service.selectedFile = service.status.changes.first { $0.path == path }
-    }
 }
 
 /// One file row: status letter, name, directory, and a hover-revealed stage button.

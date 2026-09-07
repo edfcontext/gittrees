@@ -5,12 +5,14 @@ import Testing
 @Suite("WorktreePathSuggester")
 struct WorktreePathSuggesterTests {
 
-    @Test("the default worktree root is a sibling directory named after the repository")
+    @Test("the default worktree root is a .worktrees directory beside the repository")
     func defaultRoot() {
         let repository = URL(fileURLWithPath: "/Users/me/Development/nalcus/summit")
         let root = WorktreePathSuggester.defaultWorktreeRoot(forRepositoryAt: repository)
 
-        #expect(root.path == "/Users/me/Development/nalcus/worktrees/summit")
+        // The repository name is not a level of its own: the branch directory inside
+        // `worktrees` is what names the checkout.
+        #expect(root.path == "/Users/me/Development/nalcus/.worktrees")
     }
 
     @Test(
@@ -49,10 +51,19 @@ struct WorktreePathSuggesterTests {
 
     @Test("the suggested path joins the root and the derived directory name")
     func suggestedPath() {
-        let root = URL(fileURLWithPath: "/Users/me/Development/nalcus/worktrees/summit")
+        let repository = URL(fileURLWithPath: "/Users/me/Development/nalcus/summit")
+        let root = WorktreePathSuggester.defaultWorktreeRoot(forRepositoryAt: repository)
         let path = WorktreePathSuggester.suggestedPath(worktreeRoot: root, branch: "feature/zpl-templates")
 
-        #expect(path.path == "/Users/me/Development/nalcus/worktrees/summit/zpl-templates")
+        #expect(path.path == "/Users/me/Development/nalcus/.worktrees/zpl-templates")
+    }
+
+    @Test("a configured root is joined the same way, whatever shape it has")
+    func suggestedPathUnderACustomRoot() {
+        let root = URL(fileURLWithPath: "/Volumes/Scratch/summit-trees")
+        let path = WorktreePathSuggester.suggestedPath(worktreeRoot: root, branch: "bugfix/scanner")
+
+        #expect(path.path == "/Volumes/Scratch/summit-trees/scanner")
     }
 
     @Test("an existing directory makes the suggestion fall through to a free name")

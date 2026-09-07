@@ -303,6 +303,148 @@ public final class GitClient: Sendable {
         return !result.stdout.isEmpty
     }
 
+    // MARK: - Ignore rules
+
+    /// The currently untracked paths that `pattern` would hide.
+    ///
+    /// Git's ignore matching has enough corners — anchoring, `**`, character classes,
+    /// directory-only rules — that reimplementing it here would eventually disagree with
+    /// the file GitTrees is about to write. Instead Git is asked for the untracked list
+    /// twice: once as it stands, and once with the candidate rule added. Whatever
+    /// disappears between the two is exactly what the rule catches.
+    ///
+    /// The second run points `core.excludesFile` at a copy of the user's own global
+    /// excludes with the pattern appended, because that setting replaces the global file
+    /// rather than adding to it — without the copy, the comparison would also be
+    /// measuring the loss of every rule the user already has.
+    public func pathsHidden(byIgnorePattern pattern: String, worktree: URL) async throws -> [String] {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        let before = try await untrackedPaths(worktree: worktree, excludesFile: nil)
+        guard !before.isEmpty else { return [] }
+
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("gittrees-ignore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let candidate = directory.appendingPathComponent("rule", isDirectory: false)
+        let global = await globalExcludes(worktree: worktree)
+        try (global + "\n" + trimmed + "\n").write(to: candidate, atomically: true, encoding: .utf8)
+
+        let after = Set(try await untrackedPaths(worktree: worktree, excludesFile: candidate))
+        return before.filter { !after.contains($0) }
+    }
+
+    /// The contents of the excludes file Git is currently applying on top of every
+    /// repository, or an empty string when there is none to find.
+    private func globalExcludes(worktree: URL) async -> String {
+        let configured = try? await configValue(["--get", "core.excludesFile"], in: worktree)
+        let path: String
+        if let configured, !configured.isEmpty {
+            path = (configured as NSString).expandingTildeInPath
+        } else {
+            // Git's default when the setting is absent.
+            let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
+                ?? (("~/.config" as NSString).expandingTildeInPath)
+            path = base + "/git/ignore"
+        }
+        return (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    }
+
+    private func untrackedPaths(worktree: URL, excludesFile: URL?) async throws -> [String] {
+        var arguments: [String] = []
+        if let excludesFile {
+            arguments += ["-c", "core.excludesFile=\(excludesFile.path)"]
+        }
+        arguments += [
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all"
+        ]
+        let result = try await run(arguments, in: worktree)
+        return try StatusParser.parse(result.stdout)
+            .changes
+            .filter { $0.kind == .untracked }
+            .map(\.path)
+    }
+
+    // MARK: - Stash
+
+    /// `git stash push --include-untracked`, returning the new stash commit.
+    ///
+    /// Returns nil when there was nothing to stash: Git reports "No local changes to
+    /// save" and exits zero, so the only reliable signal is whether `refs/stash` moved.
+    /// The commit hash — rather than `stash@{0}` — is what later steps address, because
+    /// a reflog selector means a different entry the moment anything else stashes.
+    public func stashPush(worktree: URL, message: String) async throws -> String? {
+        let before = try await stashTip(directory: worktree)
+        _ = try await run(
+            ["stash", "push", "--include-untracked", "--message", message],
+            in: worktree
+        )
+        guard let after = try await stashTip(directory: worktree), after != before else { return nil }
+        return after
+    }
+
+    /// `git stash apply [--index] <commit>` — restores a stash into `worktree`.
+    ///
+    /// `restoringIndex` reproduces which files were staged. Git refuses it in cases it
+    /// cannot represent, so the caller is expected to fall back to a plain apply.
+    public func stashApply(worktree: URL, stash: String, restoringIndex: Bool) async throws {
+        var arguments = ["stash", "apply"]
+        if restoringIndex { arguments.append("--index") }
+        arguments.append(stash)
+        _ = try await run(arguments, in: worktree)
+    }
+
+    /// `git stash drop <stash@{n}>`. Takes a reflog selector, which `stashSelector`
+    /// resolves from a commit hash: `drop` is the one stash command that cannot take a
+    /// raw commit, because it deletes a reflog entry rather than a commit.
+    public func stashDrop(repository: URL, selector: String) async throws {
+        _ = try await run(["stash", "drop", "--quiet", selector], in: repository)
+    }
+
+    /// The `stash@{n}` selector currently pointing at `commit`, or nil if it is gone.
+    ///
+    /// One line per entry, two space-separated fields. Neither a hash nor a reflog
+    /// selector can contain a space or a newline, so this needs none of the NUL
+    /// separation the path-carrying commands do.
+    public func stashSelector(repository: URL, forCommit commit: String) async throws -> String? {
+        let result = try await run(["stash", "list", "--format=%H %gd"], in: repository)
+        for line in result.stdoutText.split(separator: "\n") {
+            let fields = line.split(separator: " ", maxSplits: 1)
+            guard fields.count == 2, fields[0] == commit else { continue }
+            return String(fields[1])
+        }
+        return nil
+    }
+
+    private func stashTip(directory: URL) async throws -> String? {
+        let result = try await run(
+            ["rev-parse", "--verify", "--quiet", "refs/stash"],
+            in: directory,
+            acceptableExitCodes: [0, 1]
+        )
+        let value = result.trimmedStdout
+        return value.isEmpty ? nil : value
+    }
+
+    /// The commit `HEAD` resolves to, used as the start point that guarantees a stash
+    /// applies cleanly in a freshly created worktree.
+    public func headCommit(worktree: URL) async throws -> String? {
+        let result = try await run(
+            ["rev-parse", "--verify", "--quiet", "HEAD"],
+            in: worktree,
+            acceptableExitCodes: [0, 1]
+        )
+        let value = result.trimmedStdout
+        return value.isEmpty ? nil : value
+    }
+
     // MARK: - Staging
 
     /// Stages whole files. Hunk and line staging are deliberately out of scope.

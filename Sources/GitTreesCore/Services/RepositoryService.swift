@@ -56,14 +56,39 @@ public struct NewWorktreeRequest: Sendable, Equatable {
         case newBranch(name: String, startPoint: String)
     }
 
+    /// What happens to the uncommitted changes in the worktree the request was made from.
+    public enum UncommittedChanges: String, Sendable, Equatable, CaseIterable, Identifiable {
+        /// Leave them where they are. The new worktree starts clean.
+        case leave
+        /// Take them out of the source worktree and put them in the new one.
+        case move
+        /// Put them in the new worktree and leave the source worktree as it was.
+        case copy
+
+        public var id: String { rawValue }
+    }
+
     public var mode: Mode
     public var path: URL
     public var openInEditor: Bool
+    public var uncommittedChanges: UncommittedChanges
+    /// A rule to add to the local exclude file once the worktree exists, so a worktree
+    /// root that happens to sit inside the repository does not show up as untracked.
+    /// Nil when there is nothing to add or the user declined.
+    public var ignoreRule: String?
 
-    public init(mode: Mode, path: URL, openInEditor: Bool) {
+    public init(
+        mode: Mode,
+        path: URL,
+        openInEditor: Bool,
+        uncommittedChanges: UncommittedChanges = .leave,
+        ignoreRule: String? = nil
+    ) {
         self.mode = mode
         self.path = path
         self.openInEditor = openInEditor
+        self.uncommittedChanges = uncommittedChanges
+        self.ignoreRule = ignoreRule
     }
 
     /// The branch the new worktree will have checked out.
@@ -125,6 +150,7 @@ public final class RepositoryService {
             guard selectedWorktreePath != oldValue else { return }
             status = .empty
             history = []
+            selectedFileKeys = []
             selectedFile = nil
             pullRequest = nil
             refreshSelectedWorktree()
@@ -133,7 +159,16 @@ public final class RepositoryService {
         }
     }
 
+    /// The rows selected in Changes, as `WorktreeStatus` selection keys.
+    ///
+    /// A set rather than one key, because the list supports the ordinary macOS
+    /// multi-selection gestures and stage/unstage/ignore act on everything selected.
+    public var selectedFileKeys: Set<String> = []
+
     /// The file whose diff is shown, plus which side of the index it is shown for.
+    ///
+    /// Only ever set when exactly one row is selected: a diff pane showing one of several
+    /// selected files would be showing an arbitrary one.
     public var selectedFile: FileChange?
     public var showingStagedDiff = false
 
@@ -345,6 +380,7 @@ public final class RepositoryService {
         status = .empty
         history = []
         selectedWorktreePath = nil
+        selectedFileKeys = []
         selectedFile = nil
         dirtyStates = [:]
         remotes = []
@@ -485,15 +521,34 @@ public final class RepositoryService {
         }
     }
 
-    /// Keeps the diff pane pointed at the same path after a refresh, and drops the
-    /// selection when the path no longer has changes.
+    /// Carries the selection across a refresh: rows that are still there stay selected,
+    /// a file that only moved between the staged and unstaged sections is followed, and a
+    /// path with no changes left drops out.
     private func reconcileSelectedFile() {
-        guard let selectedFile else { return }
-        if let updated = status.changes.first(where: { $0.path == selectedFile.path }) {
-            self.selectedFile = updated
-            if showingStagedDiff && !updated.hasStagedChanges { showingStagedDiff = false }
-        } else {
-            self.selectedFile = nil
+        selectedFileKeys = Set(selectedFileKeys.compactMap(status.survivingSelectionKey(for:)))
+        focusSelectedFile(resettingSide: false)
+    }
+
+    /// Points the diff pane at the selection, which it can only do when the selection is
+    /// a single row.
+    ///
+    /// `resettingSide` follows the row the user just clicked to its own side of the
+    /// index. A refresh passes false so that flipping the diff's Working Tree/Staged
+    /// picker is not undone the next time status is read.
+    public func focusSelectedFile(resettingSide: Bool) {
+        guard selectedFileKeys.count == 1,
+              let key = selectedFileKeys.first,
+              let selection = WorktreeStatus.selection(fromKey: key),
+              let change = status.change(forSelectionKey: key)
+        else {
+            selectedFile = nil
+            return
+        }
+        selectedFile = change
+        if resettingSide {
+            showingStagedDiff = selection.staged
+        } else if showingStagedDiff, !change.hasStagedChanges {
+            showingStagedDiff = false
         }
     }
 
@@ -629,25 +684,27 @@ public final class RepositoryService {
     // MARK: - Worktree lifecycle
 
     public func createWorktree(_ request: NewWorktreeRequest) async -> Worktree? {
+        guard repository != nil else { return nil }
+        let created = await addWorktree(request)
+        // Only once the worktree is really there: an ignore rule for a worktree root that
+        // was never created would be a leftover the user did not ask for.
+        if created != nil, let rule = request.ignoreRule {
+            await addIgnoreRule(pattern: rule, destination: .local)
+        }
+        return created
+    }
+
+    private func addWorktree(_ request: NewWorktreeRequest) async -> Worktree? {
         guard let repository else { return nil }
+
+        if request.uncommittedChanges != .leave, let source = selectedWorktree {
+            return await createWorktree(request, transferringChangesFrom: source)
+        }
+
         // `withOperation` wraps a failure as nil, so the nested optional here is
         // "operation failed" outside and "worktree not found afterwards" inside.
         let created: Worktree?? = await withOperation(label: "Creating worktree…") { [client] in
-            switch request.mode {
-            case .existingBranch(let branch):
-                try await client.createWorktree(
-                    repository: repository.commandDirectory,
-                    path: request.path,
-                    checkingOut: branch
-                )
-            case .newBranch(let name, let startPoint):
-                try await client.createWorktree(
-                    repository: repository.commandDirectory,
-                    path: request.path,
-                    newBranch: name,
-                    startingAt: startPoint
-                )
-            }
+            try await Self.addWorktree(request, in: repository, using: client)
         } onFailure: { error in
             PresentableError(title: "Could Not Create Worktree", error: error)
         } thenReturning: { [weak self] () -> Worktree? in
@@ -657,6 +714,149 @@ public final class RepositoryService {
             return worktree
         }
         return created ?? nil
+    }
+
+    /// Creates the worktree and carries `source`'s uncommitted work into it.
+    ///
+    /// The transfer goes through the stash rather than a patch file, because the stash is
+    /// the one mechanism that reproduces the whole working state — staged and unstaged
+    /// changes kept apart, untracked files included — and it is a real commit in the
+    /// repository, so nothing lives in a temporary file that a crash could strand.
+    ///
+    /// The sequence is: stash in the source, create the worktree, apply in the new
+    /// worktree, and only then drop the stash entry. Every failure path either puts the
+    /// changes back or reports which stash still holds them; none of them drops it.
+    private func createWorktree(
+        _ request: NewWorktreeRequest,
+        transferringChangesFrom source: Worktree
+    ) async -> Worktree? {
+        guard let repository else { return nil }
+        guard claim(source) else {
+            lastError = PresentableError(
+                title: "Operation In Progress",
+                message: "Another operation is already running in \(source.path.path)."
+            )
+            return nil
+        }
+        defer { release(source) }
+
+        let label = request.uncommittedChanges == .copy
+            ? "Copying changes to new worktree…"
+            : "Moving changes to new worktree…"
+        let keepInSource = request.uncommittedChanges == .copy
+
+        let created: Worktree?? = await withOperation(label: label, worktree: source) { [client] in
+            let repositoryDirectory = repository.commandDirectory
+
+            guard let stash = try await client.stashPush(
+                worktree: source.path,
+                message: "GitTrees: \(request.branchName)"
+            ) else {
+                throw GitError.noLocalChanges(path: source.path.path)
+            }
+
+            // From here the changes exist only in the stash, so every exit restores them
+            // or names the stash that still has them.
+            var resolved = request
+            if case .newBranch(let name, let startPoint) = request.mode, startPoint.isEmpty {
+                // `HEAD` would resolve in the repository's main worktree, not this one, so
+                // a detached source worktree has to name its commit outright.
+                let head = try await client.headCommit(worktree: source.path)
+                resolved.mode = .newBranch(name: name, startPoint: head ?? "")
+            }
+
+            do {
+                try await Self.addWorktree(resolved, in: repository, using: client)
+            } catch {
+                try await client.stashApply(worktree: source.path, stash: stash, restoringIndex: true)
+                try await Self.dropStash(stash, in: repositoryDirectory, using: client)
+                throw error
+            }
+
+            do {
+                try await client.stashApply(worktree: request.path, stash: stash, restoringIndex: true)
+            } catch {
+                // `--index` is refused in cases Git cannot represent. Retrying without it
+                // is only safe while the failed attempt has left the worktree untouched.
+                guard try await client.isDirty(worktree: request.path) == false else {
+                    throw GitError.changesLeftInStash(
+                        stash: stash,
+                        reason: "The worktree was created, but the changes could not be applied to it."
+                    )
+                }
+                do {
+                    try await client.stashApply(worktree: request.path, stash: stash, restoringIndex: false)
+                } catch {
+                    throw GitError.changesLeftInStash(
+                        stash: stash,
+                        reason: "The worktree was created, but the changes could not be applied to it."
+                    )
+                }
+            }
+
+            if keepInSource {
+                do {
+                    try await client.stashApply(worktree: source.path, stash: stash, restoringIndex: true)
+                } catch {
+                    throw GitError.changesLeftInStash(
+                        stash: stash,
+                        reason: "The changes are in the new worktree, but could not be put back in \(source.path.lastPathComponent)."
+                    )
+                }
+            }
+
+            try await Self.dropStash(stash, in: repositoryDirectory, using: client)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Move Changes", error: error)
+        } thenReturning: { [weak self] () -> Worktree? in
+            await self?.reload()
+            let worktree = self?.worktrees.first { $0.path == request.path.standardizedFileURL }
+            if let worktree { self?.selectedWorktreePath = worktree.id }
+            return worktree
+        }
+        return created ?? nil
+    }
+
+    /// Runs the `git worktree add` a request describes.
+    ///
+    /// Shared by the plain creation path and the one that carries changes across, so the
+    /// two cannot drift apart in how a request is turned into a worktree.
+    private nonisolated static func addWorktree(
+        _ request: NewWorktreeRequest,
+        in repository: Repository,
+        using client: GitClient
+    ) async throws {
+        switch request.mode {
+        case .existingBranch(let branch):
+            try await client.createWorktree(
+                repository: repository.commandDirectory,
+                path: request.path,
+                checkingOut: branch
+            )
+        case .newBranch(let name, let startPoint):
+            try await client.createWorktree(
+                repository: repository.commandDirectory,
+                path: request.path,
+                newBranch: name,
+                startingAt: startPoint
+            )
+        }
+    }
+
+    /// Removes a stash entry once its contents are safely somewhere else.
+    ///
+    /// A stash that has already gone is not an error: the entry is only ever dropped
+    /// after the changes have landed, so the outcome the caller wanted already holds.
+    private nonisolated static func dropStash(
+        _ stash: String,
+        in repositoryDirectory: URL,
+        using client: GitClient
+    ) async throws {
+        guard let selector = try await client.stashSelector(
+            repository: repositoryDirectory,
+            forCommit: stash
+        ) else { return }
+        try await client.stashDrop(repository: repositoryDirectory, selector: selector)
     }
 
     /// Reads the worktree's status so the caller can warn before a destructive removal.
@@ -789,31 +989,110 @@ public final class RepositoryService {
         }
     }
 
-    /// Appends the untracked path to this worktree's `.gitignore` so it drops out of
-    /// Changes. The `.gitignore` edit itself is left unstaged for the user to commit.
-    public func ignore(_ change: FileChange) async {
-        await ignore(path: change.path, directory: false)
+    // MARK: - Ignore rules
+
+    /// The file a destination resolves to, for the sheet to show and write to.
+    ///
+    /// Only `.repository` needs a worktree — it is that worktree's own `.gitignore`.
+    /// `.local` lives in the shared git directory, so it can be resolved before any
+    /// worktree is selected.
+    public func ignoreFile(for destination: Gitignore.Destination) -> URL? {
+        guard let repository else { return nil }
+        switch destination {
+        case .local:
+            return Gitignore.fileURL(
+                for: .local,
+                worktree: repository.mainWorktreePath,
+                commonGitDir: repository.commonGitDir
+            )
+        case .repository:
+            guard let worktree = selectedWorktree else { return nil }
+            return Gitignore.fileURL(
+                for: .repository,
+                worktree: worktree.path,
+                commonGitDir: repository.commonGitDir
+            )
+        }
     }
 
-    /// Appends a directory pattern (`path/`) to `.gitignore`.
+    /// True when the rule is already on a line of its own in that destination's file.
+    public func hasIgnoreRule(pattern: String, destination: Gitignore.Destination) -> Bool {
+        guard let file = ignoreFile(for: destination) else { return false }
+        return Gitignore.contains(pattern: pattern, in: file)
+    }
+
+    /// The untracked paths `pattern` would hide, so a rule can be checked before it is
+    /// written. Returns an empty list rather than an error: this drives a preview, and a
+    /// half-typed custom pattern must not raise an alert.
+    public func previewIgnore(pattern: String) async -> [String] {
+        guard let worktree = selectedWorktree else { return [] }
+        return (try? await client.pathsHidden(byIgnorePattern: pattern, worktree: worktree.path)) ?? []
+    }
+
+    /// Appends one rule to the chosen ignore file so the paths it matches drop out of
+    /// Changes. A `.gitignore` edit is left unstaged for the user to commit; nothing is
+    /// written to `info/exclude` that Git would ever try to commit.
+    @discardableResult
+    public func addIgnoreRule(
+        pattern: String,
+        destination: Gitignore.Destination
+    ) async -> Bool {
+        await addIgnoreRules(patterns: [pattern], destination: destination)
+    }
+
+    /// Appends several rules under one operation and one refresh.
+    ///
+    /// The write is not all-or-nothing: a rule that fails leaves the ones before it in
+    /// the file, which is the same state a partial hand edit would leave and is visible
+    /// in the file itself.
+    @discardableResult
+    public func addIgnoreRules(
+        patterns: [String],
+        destination: Gitignore.Destination
+    ) async -> Bool {
+        let wanted = patterns
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard let file = ignoreFile(for: destination), !wanted.isEmpty else { return false }
+
+        let added = await withOperation(
+            label: "Updating \(destination.displayName)…",
+            worktree: selectedWorktree
+        ) {
+            var added = false
+            for pattern in wanted {
+                added = try Gitignore.append(pattern: pattern, to: file) || added
+            }
+            return added
+        } onFailure: { error in
+            PresentableError(title: "Could Not Update \(destination.displayName)", error: error)
+        } thenReturning: { [weak self] (added: Bool) -> Bool in
+            self?.refreshSelectedWorktree()
+            return added
+        }
+        return added ?? false
+    }
+
+    /// Appends one rule per path to this worktree's `.gitignore`, in one operation so a
+    /// multiple selection is a single edit rather than one refresh per file.
+    public func ignore(_ changes: [FileChange]) async {
+        let patterns = changes.map { Gitignore.pattern(forPath: $0.path) }
+        await addIgnoreRules(patterns: patterns, destination: .repository)
+    }
+
+    /// Appends the untracked path to this worktree's `.gitignore`.
+    public func ignore(_ change: FileChange) async {
+        await ignore([change])
+    }
+
+    /// Appends a directory pattern (`/path/`) to `.gitignore`.
     public func ignoreDirectory(of change: FileChange) async {
         let directory = change.directory
         guard !directory.isEmpty else { return }
-        await ignore(path: directory, directory: true)
-    }
-
-    private func ignore(path: String, directory: Bool) async {
-        guard let worktree = selectedWorktree, !path.isEmpty else { return }
-        let pattern = directory
-            ? Gitignore.pattern(forDirectory: path)
-            : Gitignore.pattern(forPath: path)
-        _ = await withOperation(label: "Updating .gitignore…", worktree: worktree) {
-            try Gitignore.append(pattern: pattern, inWorktree: worktree.path)
-        } onFailure: { error in
-            PresentableError(title: "Could Not Update .gitignore", error: error)
-        } thenReturning: { [weak self] in
-            self?.refreshSelectedWorktree()
-        }
+        await addIgnoreRule(
+            pattern: Gitignore.pattern(forDirectory: directory),
+            destination: .repository
+        )
     }
 
     // MARK: - Diff
