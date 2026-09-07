@@ -397,8 +397,8 @@ public final class RepositoryService {
         startRefresh(presentError: true, retryOnce: false)
     }
 
-    /// Called when this window becomes key, so Changes (and the rest of the
-    /// worktree) pick up edits made in an IDE or another GitTrees window.
+    /// Called when GitTrees becomes the active app or this window becomes key, so
+    /// Changes pick up edits made in an IDE without a click inside the window.
     ///
     /// Activation fires several notifications at once (`didBecomeActive`,
     /// `didBecomeKey`, and sometimes a view reinstall). Starting a refresh on each

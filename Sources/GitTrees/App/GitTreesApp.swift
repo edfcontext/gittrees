@@ -19,6 +19,12 @@ final class AppSession {
     private var pendingDirectories: [URL] = []
     /// Live repository windows, keyed by their service identity.
     private var liveWindowIDs: Set<ObjectIdentifier> = []
+    /// Weak refs so activation can refresh every open repository, not only the
+    /// window that happens to be key — `didBecomeKey` often does not fire when
+    /// the app is reactivated by the Dock or a click on an already-focused pane.
+    private var liveServices: [ObjectIdentifier: WeakRepositoryService] = [:]
+    /// The process-wide session, so `AppDelegate` can refresh on `applicationDidBecomeActive`.
+    weak static var current: AppSession?
     /// Set from `applicationShouldTerminate` before windows start closing on ⌘Q.
     private(set) static var isTerminating = false
 
@@ -28,6 +34,7 @@ final class AppSession {
 
     init(preferences: PreferencesService) {
         self.inactiveService = RepositoryService(preferences: preferences)
+        AppSession.current = self
     }
 
     var serviceForSettings: RepositoryService {
@@ -48,18 +55,37 @@ final class AppSession {
     }
 
     func registerWindow(_ service: RepositoryService) {
-        liveWindowIDs.insert(ObjectIdentifier(service))
+        let id = ObjectIdentifier(service)
+        liveWindowIDs.insert(id)
+        liveServices[id] = WeakRepositoryService(service)
+    }
+
+    /// Re-reads every open repository. Called when GitTrees becomes the active app
+    /// again, so Changes pick up edits made in an IDE without requiring a click
+    /// inside the window first.
+    func refreshAllOnActivation() {
+        for box in liveServices.values {
+            box.service?.refreshOnWindowActivation()
+        }
     }
 
     /// Drops the closed window from the restore list unless this is a quit — closing
     /// the last window terminates the app, and ⌘Q closes every window, so both would
     /// otherwise wipe the session we want to reopen.
     func windowWillClose(_ service: RepositoryService, preferences: PreferencesService) {
-        liveWindowIDs.remove(ObjectIdentifier(service))
+        let id = ObjectIdentifier(service)
+        liveWindowIDs.remove(id)
+        liveServices.removeValue(forKey: id)
         let quitting = AppSession.isTerminating || liveWindowIDs.isEmpty
         guard !quitting, let repository = service.repository else { return }
         preferences.forgetOpen(repository.mainWorktreePath.path)
     }
+}
+
+/// Weak box so `AppSession` can iterate live windows without retaining them.
+private final class WeakRepositoryService {
+    weak var service: RepositoryService?
+    init(_ service: RepositoryService) { self.service = service }
 }
 
 private struct RepositoryServiceFocusedKey: FocusedValueKey {
@@ -148,6 +174,8 @@ struct RepositoryWindow: View {
                     session.keyService = service
                     session.keyCommands = commands
                     service.refreshOnWindowActivation()
+                } onAppActive: {
+                    service.refreshOnWindowActivation()
                 } onWillClose: {
                     session.windowWillClose(service, preferences: preferences)
                 }
@@ -169,6 +197,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        AppSession.current?.refreshAllOnActivation()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -5,17 +5,20 @@ import SwiftUI
 struct WindowConfigurator: NSViewRepresentable {
     let title: String
     var onBecomeKey: () -> Void = {}
+    var onAppActive: () -> Void = {}
     var onWillClose: () -> Void = {}
 
     func makeNSView(context: Context) -> BecomeKeyView {
         let view = BecomeKeyView()
         view.onBecomeKey = onBecomeKey
+        view.onAppActive = onAppActive
         view.onWillClose = onWillClose
         return view
     }
 
     func updateNSView(_ view: BecomeKeyView, context: Context) {
         view.onBecomeKey = onBecomeKey
+        view.onAppActive = onAppActive
         view.onWillClose = onWillClose
         view.window?.title = title
         view.window?.minSize = NSSize(width: 860, height: 520)
@@ -29,6 +32,7 @@ struct WindowConfigurator: NSViewRepresentable {
 /// target for Settings and menu commands.
 final class BecomeKeyView: NSView {
     var onBecomeKey: () -> Void = {}
+    var onAppActive: () -> Void = {}
     var onWillClose: () -> Void = {}
     private var didNotifyClose = false
 
@@ -73,9 +77,11 @@ final class BecomeKeyView: NSView {
     }
 
     @objc private func appBecameActive() {
-        guard window?.isKeyWindow == true else { return }
-        DispatchQueue.main.async { [onBecomeKey] in
-            onBecomeKey()
+        // Do not require `isKeyWindow`. Activation is posted before the window is
+        // key again (Dock click, click on an already-focused pane), so that guard
+        // skipped the refresh until a later view update.
+        DispatchQueue.main.async { [onAppActive] in
+            onAppActive()
         }
     }
 
