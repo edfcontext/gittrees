@@ -1021,10 +1021,28 @@ public final class RepositoryService {
         return Gitignore.contains(pattern: pattern, in: file)
     }
 
+    /// Captures the invariant half of an ignore preview — the untracked walk and the
+    /// global excludes — so a sheet can reuse it across every pattern the user tries.
+    /// Nil when there is no worktree or the walk fails; the caller falls back to the
+    /// per-pattern path, which recomputes it.
+    public func ignorePreviewBaseline() async -> GitClient.IgnorePreviewBaseline? {
+        guard let worktree = selectedWorktree else { return nil }
+        return try? await client.ignorePreviewBaseline(worktree: worktree.path)
+    }
+
     /// The untracked paths `pattern` would hide, so a rule can be checked before it is
     /// written. Returns an empty list rather than an error: this drives a preview, and a
     /// half-typed custom pattern must not raise an alert.
-    public func previewIgnore(pattern: String) async -> [String] {
+    ///
+    /// Pass a `baseline` from `ignorePreviewBaseline()` to skip the untracked walk that
+    /// is the same for every pattern; without one the walk is redone each call.
+    public func previewIgnore(
+        pattern: String,
+        baseline: GitClient.IgnorePreviewBaseline? = nil
+    ) async -> [String] {
+        if let baseline {
+            return (try? await client.pathsHidden(byIgnorePattern: pattern, baseline: baseline)) ?? []
+        }
         guard let worktree = selectedWorktree else { return [] }
         return (try? await client.pathsHidden(byIgnorePattern: pattern, worktree: worktree.path)) ?? []
     }

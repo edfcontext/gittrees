@@ -305,6 +305,28 @@ public final class GitClient: Sendable {
 
     // MARK: - Ignore rules
 
+    /// The parts of an ignore preview that do not depend on the candidate rule.
+    ///
+    /// The untracked list and the global excludes are the same for every pattern the user
+    /// tries against one worktree, and `--untracked-files=all` is a full directory walk —
+    /// the expensive half of the preview. Capturing them once lets each pattern change pay
+    /// for a single walk rather than two. It is a snapshot: valid only while the working
+    /// tree is unchanged, which is exactly the life of the modal that reuses it.
+    public struct IgnorePreviewBaseline: Sendable {
+        let worktree: URL
+        let untracked: [String]
+        let globalExcludes: String
+    }
+
+    /// Captures the invariant half of an ignore preview for `worktree`.
+    public func ignorePreviewBaseline(worktree: URL) async throws -> IgnorePreviewBaseline {
+        IgnorePreviewBaseline(
+            worktree: worktree,
+            untracked: try await untrackedPaths(worktree: worktree, excludesFile: nil),
+            globalExcludes: await globalExcludes(worktree: worktree)
+        )
+    }
+
     /// The currently untracked paths that `pattern` would hide.
     ///
     /// Git's ignore matching has enough corners — anchoring, `**`, character classes,
@@ -318,11 +340,18 @@ public final class GitClient: Sendable {
     /// rather than adding to it — without the copy, the comparison would also be
     /// measuring the loss of every rule the user already has.
     public func pathsHidden(byIgnorePattern pattern: String, worktree: URL) async throws -> [String] {
-        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        let baseline = try await ignorePreviewBaseline(worktree: worktree)
+        return try await pathsHidden(byIgnorePattern: pattern, baseline: baseline)
+    }
 
-        let before = try await untrackedPaths(worktree: worktree, excludesFile: nil)
-        guard !before.isEmpty else { return [] }
+    /// `pathsHidden` against a captured baseline, so the untracked walk is done once and
+    /// only the "with the rule" walk runs per pattern.
+    public func pathsHidden(
+        byIgnorePattern pattern: String,
+        baseline: IgnorePreviewBaseline
+    ) async throws -> [String] {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !baseline.untracked.isEmpty else { return [] }
 
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("gittrees-ignore-\(UUID().uuidString)", isDirectory: true)
@@ -330,11 +359,11 @@ public final class GitClient: Sendable {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let candidate = directory.appendingPathComponent("rule", isDirectory: false)
-        let global = await globalExcludes(worktree: worktree)
-        try (global + "\n" + trimmed + "\n").write(to: candidate, atomically: true, encoding: .utf8)
+        try (baseline.globalExcludes + "\n" + trimmed + "\n")
+            .write(to: candidate, atomically: true, encoding: .utf8)
 
-        let after = Set(try await untrackedPaths(worktree: worktree, excludesFile: candidate))
-        return before.filter { !after.contains($0) }
+        let after = Set(try await untrackedPaths(worktree: baseline.worktree, excludesFile: candidate))
+        return baseline.untracked.filter { !after.contains($0) }
     }
 
     /// The contents of the excludes file Git is currently applying on top of every

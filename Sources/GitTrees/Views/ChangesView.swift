@@ -148,7 +148,7 @@ struct FileChangeList: View {
             Button(stageTitle(for: toStage)) { Task { await service.stage(toStage) } }
         }
         if !toUnstage.isEmpty {
-            Button(count(toUnstage, one: "Unstage File", many: "Unstage %d Files")) {
+            Button(count(toUnstage, one: "Unstage File", many: { "Unstage \($0) Files" })) {
                 Task { await service.unstage(toUnstage) }
             }
         }
@@ -157,7 +157,7 @@ struct FileChangeList: View {
         // appear only when every selected row is untracked.
         if !untracked.isEmpty, untracked.count == rows.count {
             Divider()
-            Button(count(untracked, one: "Add to .gitignore", many: "Add %d Files to .gitignore")) {
+            Button(count(untracked, one: "Add to .gitignore", many: { "Add \($0) Files to .gitignore" })) {
                 Task { await service.ignore(untracked) }
             }
             if let only = untracked.first, untracked.count == 1 {
@@ -172,7 +172,7 @@ struct FileChangeList: View {
 
         if !rows.isEmpty {
             Divider()
-            Button(count(rows.map(\.change), one: "Copy Path", many: "Copy %d Paths")) {
+            Button(count(rows.map(\.change), one: "Copy Path", many: { "Copy \($0) Paths" })) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(
                     rows.map(\.change.path).joined(separator: "\n"),
@@ -185,13 +185,15 @@ struct FileChangeList: View {
     /// A conflicted file is staged to mark it resolved, which is worth saying.
     private func stageTitle(for changes: [FileChange]) -> String {
         guard changes.allSatisfy(\.isConflicted) else {
-            return count(changes, one: "Stage File", many: "Stage %d Files")
+            return count(changes, one: "Stage File", many: { "Stage \($0) Files" })
         }
-        return count(changes, one: "Stage Resolved File", many: "Stage %d Resolved Files")
+        return count(changes, one: "Stage Resolved File", many: { "Stage \($0) Resolved Files" })
     }
 
-    private func count(_ changes: [FileChange], one: String, many: String) -> String {
-        changes.count == 1 ? one : String(format: many, changes.count)
+    /// Singular label, or a plural label built from the count. `many` takes the count so
+    /// it is interpolated directly — `String(format:)` with `%d` mismatches a Swift `Int`.
+    private func count(_ changes: [FileChange], one: String, many: (Int) -> String) -> String {
+        changes.count == 1 ? one : many(changes.count)
     }
 
     // MARK: - Selection

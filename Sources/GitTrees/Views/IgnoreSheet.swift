@@ -45,6 +45,10 @@ struct IgnoreSheet: View {
     @State private var preview: [String] = []
     @State private var isPreviewing = false
     @State private var isSaving = false
+    /// The untracked walk and global excludes, captured once: they are the same for every
+    /// pattern tried here, so reusing them halves the Git work per option. Nil until the
+    /// first capture lands; early previews fall back to recomputing it.
+    @State private var baseline: GitClient.IgnorePreviewBaseline?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -64,6 +68,9 @@ struct IgnoreSheet: View {
         }
         .frame(width: 560)
         .onAppear(perform: configureInitialState)
+        // Capture the invariant half of the preview once; the working tree does not change
+        // while this modal is open, so every pattern can reuse it.
+        .task { baseline = await service.ignorePreviewBaseline() }
         // SwiftUI cancels the running task when the id changes, so a fast click through
         // the options cannot leave a stale preview behind the current one.
         .task(id: pattern) { await refreshPreview() }
@@ -304,7 +311,7 @@ struct IgnoreSheet: View {
             return
         }
         isPreviewing = true
-        let hidden = await service.previewIgnore(pattern: candidate)
+        let hidden = await service.previewIgnore(pattern: candidate, baseline: baseline)
         // A superseded preview leaves both the spinner and the list to its replacement,
         // which has already set them for the pattern now on screen.
         guard !Task.isCancelled else { return }

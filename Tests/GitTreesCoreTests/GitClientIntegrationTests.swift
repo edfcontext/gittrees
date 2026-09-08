@@ -775,6 +775,38 @@ struct GitClientIntegrationTests {
         #expect(nothing.isEmpty)
     }
 
+    @Test("a captured baseline previews the same paths as the one-shot walk")
+    func previewIgnoreReusesBaseline() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("x\n", to: "build/out.o")
+        try fixture.write("y\n", to: "build/nested/deep.o")
+        try fixture.write("log\n", to: "run.log")
+
+        // The baseline is captured once and reused for several patterns; each must match
+        // what the self-contained call computes, so the optimisation is invisible.
+        let baseline = try await client.ignorePreviewBaseline(worktree: fixture.repository)
+        for pattern in [Gitignore.pattern(forDirectory: "build"), "*.log", "/no-such-thing/"] {
+            let viaBaseline = try await client.pathsHidden(byIgnorePattern: pattern, baseline: baseline)
+            let oneShot = try await client.pathsHidden(byIgnorePattern: pattern, worktree: fixture.repository)
+            #expect(viaBaseline == oneShot)
+        }
+    }
+
+    @Test("a baseline with no untracked files hides nothing")
+    func previewIgnoreBaselineWithCleanTree() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        // The fixture's tree is committed and clean, so there is nothing a rule could hide.
+        let baseline = try await fixture.client.ignorePreviewBaseline(worktree: fixture.repository)
+        #expect(baseline.untracked.isEmpty)
+        let hidden = try await fixture.client.pathsHidden(byIgnorePattern: "*", baseline: baseline)
+        #expect(hidden.isEmpty)
+    }
+
     @Test("the preview does not write anything to the worktree")
     func previewIgnoreLeavesNoTrace() async throws {
         let fixture = try await Fixture()
