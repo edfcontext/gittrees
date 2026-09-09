@@ -102,6 +102,8 @@ struct MainView: View {
                 CreatePullRequestSheet()
             case .ignore(let request):
                 IgnoreSheet(path: request.path)
+            case .stash:
+                StashSheet()
             }
         }
         .alert(
@@ -173,6 +175,13 @@ struct MainView: View {
             guard let request else { return }
             commands.ignoreRequest = nil
             activeSheet = .ignore(request)
+        }
+        .onChange(of: commands.stashRequested) { _, requested in
+            guard requested else { return }
+            commands.stashRequested = false
+            if service.selectedWorktree != nil, !service.status.isClean {
+                activeSheet = .stash
+            }
         }
         .onChange(of: commands.newWindowRequested) { _, requested in
             guard requested else { return }
@@ -351,6 +360,7 @@ enum ActiveSheet: Identifiable {
     case addRemote
     case createPullRequest
     case ignore(IgnoreRequest)
+    case stash
 
     var id: String {
         switch self {
@@ -361,6 +371,7 @@ enum ActiveSheet: Identifiable {
         case .addRemote: "add-remote"
         case .createPullRequest: "create-pull-request"
         case .ignore(let request): "ignore-\(request.id)"
+        case .stash: "stash"
         }
     }
 }

@@ -20,6 +20,7 @@ public final class PreferencesService {
         static let worktreeRoots = "worktreeRoots"
         static let diffContextLines = "diffContextLines"
         static let showRemoteBranches = "showRemoteBranches"
+        static let autoFetchOnActivation = "autoFetchOnActivation"
         static let preferredRemotes = "preferredRemotes"
         static let lastWorkspaceParent = "lastWorkspaceParent"
     }
@@ -41,6 +42,7 @@ public final class PreferencesService {
         self.restoreLastRepository = defaults.object(forKey: Key.restoreLastRepository) as? Bool ?? true
         self.diffContextLines = defaults.object(forKey: Key.diffContextLines) as? Int ?? 3
         self.showRemoteBranches = defaults.object(forKey: Key.showRemoteBranches) as? Bool ?? false
+        self.autoFetchOnActivation = defaults.object(forKey: Key.autoFetchOnActivation) as? Bool ?? true
         self.recentRepositories = Self.decode([RecentRepository].self, from: defaults, key: Key.recentRepositories) ?? []
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
         self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
@@ -91,6 +93,13 @@ public final class PreferencesService {
 
     public var showRemoteBranches: Bool {
         didSet { defaults.set(showRemoteBranches, forKey: Key.showRemoteBranches) }
+    }
+
+    /// Whether returning to a window quietly runs `git fetch`, so the "behind upstream"
+    /// notice reflects the remote as it is now rather than as of the last manual fetch.
+    /// A fetch is read-only; it never changes the working tree.
+    public var autoFetchOnActivation: Bool {
+        didSet { defaults.set(autoFetchOnActivation, forKey: Key.autoFetchOnActivation) }
     }
 
     public private(set) var recentRepositories: [RecentRepository] {

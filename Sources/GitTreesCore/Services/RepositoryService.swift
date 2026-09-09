@@ -142,6 +142,10 @@ public final class RepositoryService {
     public private(set) var gitHubAuth: GitHubAuth = .unknown
     /// The pull request already open for the selected worktree's branch, if any.
     public private(set) var pullRequest: PullRequest?
+    /// The repository's stash stack, newest first. Shared across worktrees.
+    public private(set) var stashes: [Stash] = []
+    /// The stash whose diff the Stashes panel is showing, addressed by commit.
+    public var selectedStashID: Stash.ID?
 
     /// Path of the selected worktree. Paths, not indices, so a refresh cannot
     /// silently move the selection to a different worktree.
@@ -197,6 +201,11 @@ public final class RepositoryService {
     private var busyWorktreePaths: Set<String> = []
     private var refreshTask: Task<Void, Never>?
     private var windowActivationTask: Task<Void, Never>?
+    private var autoFetchTask: Task<Void, Never>?
+    /// When the last opportunistic fetch ran, so activation does not fetch on every focus.
+    private var lastAutoFetch: Date?
+    /// The shortest gap between opportunistic fetches.
+    private static let autoFetchInterval: TimeInterval = 180
     private var dirtyScanTask: Task<Void, Never>?
     private var statusTask: Task<Void, Never>?
     private var gitHubTask: Task<Void, Never>?
@@ -312,6 +321,9 @@ public final class RepositoryService {
             selectedWorktreePath = nil
             worktrees = []
             branches = []
+            // A different repository carries its own fetch cadence; don't let the previous
+            // one's timestamp suppress the first auto-fetch here.
+            lastAutoFetch = nil
             await reload()
             // Prefer the worktree the user actually pointed at, then the main one.
             let requested = directory.standardizedFileURL.path
@@ -384,10 +396,13 @@ public final class RepositoryService {
         selectedFile = nil
         dirtyStates = [:]
         remotes = []
+        stashes = []
+        selectedStashID = nil
         identity = .unknown
         gitHubAuth = .unknown
         pullRequest = nil
         uninitializedDirectory = nil
+        lastAutoFetch = nil
     }
 
     // MARK: - Refresh
@@ -413,6 +428,37 @@ public final class RepositoryService {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             self?.startRefresh(presentError: false, retryOnce: true)
+            self?.maybeAutoFetch()
+        }
+    }
+
+    /// Quietly runs `git fetch` on returning to a window, so the "behind upstream" notice
+    /// reflects the remote now rather than as of the last manual fetch.
+    ///
+    /// Deliberately unobtrusive: throttled so focus-thrashing does not hammer the network,
+    /// silent on failure (a fetch that needs credentials just fails — the process runs
+    /// with `GIT_TERMINAL_PROMPT=0`), and it never surfaces output or an error alert. A
+    /// fetch only updates remote-tracking refs; the working tree is untouched.
+    private func maybeAutoFetch() {
+        guard preferences.autoFetchOnActivation,
+              let repository,
+              !remotes.isEmpty,
+              activeOperation == nil
+        else { return }
+        if let lastAutoFetch, Date().timeIntervalSince(lastAutoFetch) < Self.autoFetchInterval {
+            return
+        }
+        lastAutoFetch = Date()
+        autoFetchTask?.cancel()
+        autoFetchTask = Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.client.fetch(worktree: repository.commandDirectory, prune: false)
+            guard !Task.isCancelled else { return }
+            // Re-read so ahead/behind and the notice reflect what the fetch brought in,
+            // through the shared refresh task rather than a second bare `reload()` — that
+            // supersedes the activation refresh instead of racing it (and its
+            // `isRefreshing` flag) with an overlapping reload.
+            self.startRefresh(presentError: false, retryOnce: false)
         }
     }
 
@@ -450,6 +496,11 @@ public final class RepositoryService {
             worktrees = loadedWorktrees
             branches = loadedBranches
             remotes = loadedRemotes
+            // Best-effort: a stash-list failure must not fail the whole reload.
+            stashes = (try? await client.stashes(repository: repository.commandDirectory)) ?? []
+            if let selectedStashID, !stashes.contains(where: { $0.id == selectedStashID }) {
+                self.selectedStashID = nil
+            }
 
             // Keep the selection valid across worktree removals.
             if let selectedWorktreePath, !worktrees.contains(where: { $0.id == selectedWorktreePath }) {
@@ -1195,6 +1246,228 @@ public final class RepositoryService {
         }
     }
 
+    /// The outcome of a stash-pull-reapply, so the caller can tell a clean run from one
+    /// the user has to finish resolving.
+    private enum StashPullOutcome: Sendable {
+        /// Pulled and re-applied cleanly, or there was nothing to stash.
+        case clean(output: String)
+        /// Pulled, but re-applying the stash conflicted. The stash is preserved.
+        case conflicted(output: String, files: [String], stash: String)
+    }
+
+    /// Stashes local changes, pulls, and re-applies the stash — the manual dance people
+    /// do to pull onto a dirty worktree, done in one step and reported honestly.
+    ///
+    /// The stash is a transport, dropped only after the changes are safely re-applied;
+    /// every failure keeps it and says which commit holds the work. The re-apply does not
+    /// restore the staged/unstaged split (`git stash apply` without `--index`): after the
+    /// pull moved HEAD, a plain apply is what reliably lands the changes on the new base,
+    /// and a conflict could not preserve the split anyway.
+    public func stashPullAndReapply() async {
+        guard let worktree = selectedWorktree else { return }
+        guard claim(worktree) else {
+            lastError = PresentableError(
+                title: "Operation In Progress",
+                message: "Another operation is already running in \(worktree.path.path)."
+            )
+            return
+        }
+        defer { release(worktree) }
+        let remote = selectedRemote
+
+        let outcome = await withOperation(
+            label: "Stashing, pulling and re-applying…",
+            worktree: worktree
+        ) { [client] () -> StashPullOutcome in
+            let path = worktree.path
+
+            guard let stash = try await client.stashPush(
+                worktree: path,
+                message: "GitTrees: stash & apply"
+            ) else {
+                // Nothing to stash — this is just a pull.
+                return .clean(output: try await client.pull(worktree: path, remote: remote))
+            }
+
+            let output: String
+            do {
+                output = try await client.pull(worktree: path, remote: remote)
+            } catch {
+                // The pull failed. If it left the tree untouched, put the changes straight
+                // back; if it conflicted or half-applied, don't compound it — keep the
+                // stash and name it. Either way nothing is lost.
+                if try await client.statusSummary(worktree: path).isClean {
+                    try await client.stashApply(worktree: path, stash: stash, restoringIndex: false)
+                    try await Self.dropStash(stash, in: path, using: client)
+                    throw error
+                }
+                throw GitError.changesLeftInStash(
+                    stash: stash,
+                    reason: "The pull could not be completed, so your changes were not re-applied."
+                )
+            }
+
+            do {
+                try await client.stashApply(worktree: path, stash: stash, restoringIndex: false)
+            } catch {
+                // A re-apply conflict leaves the working tree with markers and keeps the
+                // stash. That is the outcome to report, not an error: the pull succeeded
+                // and the work is back, it just needs resolving.
+                let conflicts = try await client.statusSummary(worktree: path).conflicts.map(\.path)
+                guard !conflicts.isEmpty else {
+                    throw GitError.changesLeftInStash(
+                        stash: stash,
+                        reason: "The changes could not be re-applied after the pull."
+                    )
+                }
+                return .conflicted(output: output, files: conflicts, stash: stash)
+            }
+
+            try await Self.dropStash(stash, in: path, using: client)
+            return .clean(output: output)
+        } onFailure: { error in
+            PresentableError(title: "Stash & Apply Failed", error: error)
+        } thenReturning: { [weak self] (outcome: StashPullOutcome) -> StashPullOutcome in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+            return outcome
+        }
+
+        switch outcome {
+        case .clean(let output):
+            lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .conflicted(let output, let files, let stash):
+            lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let list = files.map { "• \($0)" }.joined(separator: "\n")
+            lastError = PresentableError(
+                title: "Re-applied With Conflicts",
+                message: "The pull succeeded and your changes were re-applied, but \(files.count == 1 ? "one file" : "\(files.count) files") now \(files.count == 1 ? "has" : "have") conflict markers to resolve:\n\n\(list)",
+                detail: "Your changes are also safe in stash \(String(stash.prefix(7))). After resolving the conflicts, run git stash drop to discard it."
+            )
+        case .none:
+            break // A hard failure already set lastError.
+        }
+    }
+
+    // MARK: - Stash panel
+
+    /// A reasonable default message for an explicit stash: the branch it is taken on, so
+    /// the stash list reads the way Git's own default does, but pre-filled and editable.
+    public var suggestedStashMessage: String {
+        if let branch = selectedWorktree?.branchName { return "WIP on \(branch)" }
+        return "WIP"
+    }
+
+    /// Stashes the selected worktree's changes under `message`. The button that calls this
+    /// is disabled on a clean worktree, but "nothing to stash" is still reported rather
+    /// than silently doing nothing.
+    public func createStash(message: String, includeUntracked: Bool) async {
+        guard let worktree = selectedWorktree else { return }
+        guard claim(worktree) else {
+            lastError = PresentableError(
+                title: "Operation In Progress",
+                message: "Another operation is already running in \(worktree.path.path)."
+            )
+            return
+        }
+        defer { release(worktree) }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalMessage = trimmed.isEmpty ? suggestedStashMessage : trimmed
+
+        let created: String?? = await withOperation(label: "Stashing…", worktree: worktree) { [client] in
+            try await client.stashPush(
+                worktree: worktree.path,
+                message: finalMessage,
+                includeUntracked: includeUntracked
+            )
+        } onFailure: { error in
+            PresentableError(title: "Stash Failed", error: error)
+        } thenReturning: { [weak self] (sha: String?) -> String? in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+            return sha
+        }
+
+        if case .some(nil) = created {
+            lastError = PresentableError(
+                title: "Nothing to Stash",
+                message: "There are no local changes in \(worktree.displayName) to stash."
+            )
+        } else if let sha = created ?? nil {
+            // Show the new stash straight away so the user can see it landed.
+            selectedStashID = sha
+        }
+    }
+
+    /// Drops a stash, addressing it by commit so a shifted selector cannot take the wrong
+    /// one. A stash already gone is not an error — the end state the user wanted holds.
+    public func dropStash(_ stash: Stash) async {
+        guard let repository else { return }
+        _ = await withOperation(label: "Dropping stash…") { [client] in
+            try await Self.dropStash(stash.commit, in: repository.commandDirectory, using: client)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Drop Stash", error: error)
+        } thenReturning: { [weak self] in
+            if self?.selectedStashID == stash.id { self?.selectedStashID = nil }
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+        }
+    }
+
+    /// Applies a stash to the selected worktree, keeping it on the stack (Git's own
+    /// `apply`, not `pop`). A conflict is reported and the stash is preserved, so nothing
+    /// is lost; the staged/unstaged split is not restored, for the same reason the pull
+    /// re-apply does not.
+    public func applyStash(_ stash: Stash) async {
+        guard let worktree = selectedWorktree else { return }
+        guard claim(worktree) else {
+            lastError = PresentableError(
+                title: "Operation In Progress",
+                message: "Another operation is already running in \(worktree.path.path)."
+            )
+            return
+        }
+        defer { release(worktree) }
+
+        enum ApplyOutcome: Sendable { case clean, conflicted([String]) }
+
+        let outcome = await withOperation(label: "Applying stash…", worktree: worktree) { [client] () -> ApplyOutcome in
+            do {
+                try await client.stashApply(worktree: worktree.path, stash: stash.commit, restoringIndex: false)
+                return .clean
+            } catch {
+                let conflicts = try await client.statusSummary(worktree: worktree.path).conflicts.map(\.path)
+                guard !conflicts.isEmpty else { throw error }
+                return .conflicted(conflicts)
+            }
+        } onFailure: { error in
+            PresentableError(title: "Could Not Apply Stash", error: error)
+        } thenReturning: { [weak self] (outcome: ApplyOutcome) -> ApplyOutcome in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+            return outcome
+        }
+
+        if case .conflicted(let files) = outcome {
+            let list = files.map { "• \($0)" }.joined(separator: "\n")
+            lastError = PresentableError(
+                title: "Applied With Conflicts",
+                message: "The stash was applied, but \(files.count == 1 ? "one file" : "\(files.count) files") now \(files.count == 1 ? "has" : "have") conflict markers to resolve:\n\n\(list)",
+                detail: "The stash is kept so you can recover the original. After resolving, drop it from the Stashes panel."
+            )
+        }
+    }
+
+    /// The patch a stash would apply, for the panel's diff pane.
+    public func stashDiff(_ stash: Stash) async throws -> String {
+        guard let repository else { return "" }
+        return try await client.stashDiff(
+            repository: repository.commandDirectory,
+            commit: stash.commit,
+            contextLines: preferences.diffContextLines
+        )
+    }
+
     /// Pushes, publishing the branch when it has no upstream yet.
     public func push(setUpstream: Bool = false) async {
         // Publishing needs a named remote; an ordinary push can fall back to Git's own
@@ -1294,7 +1567,11 @@ public final class RepositoryService {
 
     /// Marks a worktree busy, returning false when something is already running there.
     private func claim(_ worktree: Worktree) -> Bool {
-        busyWorktreePaths.insert(worktree.id).inserted
+        // A user's Git operation supersedes the silent auto-fetch: cancel it (which
+        // SIGTERMs the `git fetch`) so the two cannot contend on `.git` ref locks and
+        // surface a spurious "another git process is running" as an operation failure.
+        autoFetchTask?.cancel()
+        return busyWorktreePaths.insert(worktree.id).inserted
     }
 
     private func release(_ worktree: Worktree) {

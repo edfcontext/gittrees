@@ -123,6 +123,13 @@ struct PreferencesView: View {
                 Toggle("Show remote branches in the sidebar", isOn: $preferences.showRemoteBranches)
                 Toggle("Reopen repository windows at launch", isOn: $preferences.restoreLastRepository)
             }
+
+            Section("Remote") {
+                Toggle("Fetch automatically when returning to a window", isOn: $preferences.autoFetchOnActivation)
+                Text("Runs git fetch in the background, at most every few minutes, so the “behind upstream” notice stays current. A fetch only updates remote-tracking refs — it never changes your files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 560, height: 480)

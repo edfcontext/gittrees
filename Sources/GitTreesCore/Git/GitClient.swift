@@ -403,18 +403,43 @@ public final class GitClient: Sendable {
 
     // MARK: - Stash
 
-    /// `git stash push --include-untracked`, returning the new stash commit.
+    /// The stash stack, newest first, for a repository. `refs/stash` is shared by every
+    /// worktree, so this is repository-wide rather than per-worktree.
+    public func stashes(repository: URL) async throws -> [Stash] {
+        let result = try await run(
+            ["stash", "list", "-z", "--format=\(StashParser.format)"],
+            in: repository
+        )
+        return try StashParser.parse(result.stdout)
+    }
+
+    /// `git stash show -p <commit>` — the patch a stash would apply, including any
+    /// untracked files it captured. Addressed by commit so a shifting selector cannot
+    /// point the diff at the wrong entry.
+    public func stashDiff(repository: URL, commit: String, contextLines: Int = 3) async throws -> String {
+        let result = try await run(
+            ["stash", "show", "--include-untracked", "-p", "-U\(contextLines)", commit],
+            in: repository
+        )
+        return result.stdoutText
+    }
+
+    /// `git stash push`, returning the new stash commit.
     ///
     /// Returns nil when there was nothing to stash: Git reports "No local changes to
     /// save" and exits zero, so the only reliable signal is whether `refs/stash` moved.
     /// The commit hash — rather than `stash@{0}` — is what later steps address, because
     /// a reflog selector means a different entry the moment anything else stashes.
-    public func stashPush(worktree: URL, message: String) async throws -> String? {
+    public func stashPush(
+        worktree: URL,
+        message: String,
+        includeUntracked: Bool = true
+    ) async throws -> String? {
         let before = try await stashTip(directory: worktree)
-        _ = try await run(
-            ["stash", "push", "--include-untracked", "--message", message],
-            in: worktree
-        )
+        var arguments = ["stash", "push"]
+        if includeUntracked { arguments.append("--include-untracked") }
+        arguments += ["--message", message]
+        _ = try await run(arguments, in: worktree)
         guard let after = try await stashTip(directory: worktree), after != before else { return nil }
         return after
     }

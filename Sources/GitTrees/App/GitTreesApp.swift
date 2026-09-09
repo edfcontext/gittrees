@@ -234,6 +234,8 @@ final class AppCommands {
     var ignoreRequest: IgnoreRequest?
     /// Open the New Worktree sheet already set to carry the current changes across.
     var branchChangesRequested = false
+    /// Open the Stash sheet for the selected worktree.
+    var stashRequested = false
 
     func openRepository() { openRepositoryRequested = true }
     func newWorktree() { newWorktreeRequested = true }
@@ -246,6 +248,7 @@ final class AppCommands {
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
     func ignore(path: String) { ignoreRequest = IgnoreRequest(path: path) }
     func branchChanges() { branchChangesRequested = true }
+    func stash() { stashRequested = true }
 }
 
 /// Menu commands target the key repository window.
@@ -307,6 +310,10 @@ private struct GitTreesCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(hasNoWorktree)
+            Button("Stash, Pull & Re-apply") {
+                Task { await service?.stashPullAndReapply() }
+            }
+            .disabled(hasNoWorktree)
             Button("Push") {
                 Task { await service?.push(setUpstream: service?.selectedBranchNeedsUpstream ?? false) }
             }
@@ -329,6 +336,10 @@ private struct GitTreesCommands: Commands {
 
             Button("Move Changes to New Worktree…") { commands?.branchChanges() }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(hasNoWorktree || service?.status.isClean != false)
+
+            Button("Stash Changes…") { commands?.stash() }
+                .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(hasNoWorktree || service?.status.isClean != false)
 
             Divider()

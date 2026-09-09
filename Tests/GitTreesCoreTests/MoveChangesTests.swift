@@ -263,4 +263,73 @@ struct MoveChangesTests {
         #expect(!(try await fixture.status(of: fixture.repository).isClean))
         #expect(try await fixture.stashCount() == 0)
     }
+
+    // MARK: - Stash panel
+
+    @Test("creating a stash clears the worktree and lists the entry with its message")
+    func createStashListsAndClears() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.makeDirty()
+
+        await fixture.service.createStash(message: "my saved work", includeUntracked: true)
+        try await fixture.settle()
+
+        #expect(try await fixture.status(of: fixture.repository).isClean)
+        #expect(fixture.service.stashes.count == 1)
+        let stash = try #require(fixture.service.stashes.first)
+        #expect(stash.message == "my saved work")
+        #expect(stash.branch == "main")
+        // The new stash is selected so its diff shows immediately.
+        #expect(fixture.service.selectedStashID == stash.id)
+        #expect(fixture.service.lastError == nil)
+    }
+
+    @Test("an empty message falls back to the suggested default")
+    func createStashDefaultsMessage() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.makeDirty()
+
+        await fixture.service.createStash(message: "   ", includeUntracked: true)
+        try await fixture.settle()
+
+        #expect(fixture.service.stashes.first?.message == fixture.service.suggestedStashMessage)
+    }
+
+    @Test("dropping a stash removes it from the list")
+    func dropStashRemovesEntry() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.makeDirty()
+        await fixture.service.createStash(message: "to drop", includeUntracked: true)
+        try await fixture.settle()
+        let stash = try #require(fixture.service.stashes.first)
+
+        await fixture.service.dropStash(stash)
+        try await fixture.settle()
+
+        #expect(fixture.service.stashes.isEmpty)
+        #expect(fixture.service.selectedStashID == nil)
+        #expect(try await fixture.stashCount() == 0)
+    }
+
+    @Test("applying a stash restores the changes and keeps it on the stack")
+    func applyStashRestoresAndKeeps() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.makeDirty()
+        await fixture.service.createStash(message: "to apply", includeUntracked: true)
+        try await fixture.settle()
+        #expect(try await fixture.status(of: fixture.repository).isClean)
+        let stash = try #require(fixture.service.stashes.first)
+
+        await fixture.service.applyStash(stash)
+        try await fixture.settle()
+
+        // The work is back in the worktree, and Apply (not Pop) leaves the stash in place.
+        #expect(!(try await fixture.status(of: fixture.repository).isClean))
+        #expect(fixture.service.stashes.count == 1)
+        #expect(fixture.service.lastError == nil)
+    }
 }

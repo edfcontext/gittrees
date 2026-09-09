@@ -7,6 +7,7 @@ struct WorktreeDetailView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case changes = "Changes"
         case history = "History"
+        case stashes = "Stashes"
         case branchInfo = "Repository"
 
         var id: String { rawValue }
@@ -39,7 +40,7 @@ struct WorktreeDetailView: View {
             HStack(spacing: 0) {
                 Picker("View", selection: $tab) {
                     ForEach(Tab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
+                        Text(label(for: tab)).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -63,6 +64,15 @@ struct WorktreeDetailView: View {
         .background(GitTreesUI.barBackground)
     }
 
+    /// The tab's name, with a stash count so the user can see stashes exist without
+    /// opening the tab.
+    private func label(for tab: Tab) -> String {
+        if tab == .stashes, !service.stashes.isEmpty {
+            return "Stashes (\(service.stashes.count))"
+        }
+        return tab.rawValue
+    }
+
     @ViewBuilder
     private var content: some View {
         if worktree.isMissingOnDisk {
@@ -73,6 +83,8 @@ struct WorktreeDetailView: View {
                 ChangesView()
             case .history:
                 HistoryView()
+            case .stashes:
+                StashView()
             case .branchInfo:
                 BranchInfoView(worktree: worktree, onAddRemote: onAddRemote)
             }
@@ -85,6 +97,7 @@ struct WorktreeHeaderBar: View {
     @Environment(RepositoryService.self) private var service
     @Environment(PreferencesService.self) private var preferences
     @Environment(WorkspaceLauncher.self) private var launcher
+    @Environment(AppCommands.self) private var commands
 
     let worktree: Worktree
     let onRequestRemoval: (Worktree) -> Void
@@ -197,10 +210,26 @@ struct WorktreeHeaderBar: View {
             // Only worth the space when there is actually a choice to make.
             if service.remotes.count > 1 { remotePicker }
 
+            Button("Stash") { commands.stash() }
+                .disabled(service.status.isClean)
+                .help(service.status.isClean
+                    ? "Nothing to stash — the worktree is clean."
+                    : "Set the local changes aside on the stash (⌥⌘S).")
+
+            Divider().frame(height: 16)
+
             Button("Fetch") { Task { await service.fetch() } }
                 .help(service.selectedRemote.map { "git fetch \($0) (⇧⌘F)" } ?? "git fetch --all (⇧⌘F)")
-            Button("Pull") { Task { await service.pull() } }
-                .help(service.selectedRemote.map { "git pull \($0) (⇧⌘P)" } ?? "git pull (⇧⌘P)")
+            Menu("Pull") {
+                Button("Pull") { Task { await service.pull() } }
+                Button("Stash, Pull & Re-apply") { Task { await service.stashPullAndReapply() } }
+                    .help("Stash local changes, pull, then re-apply them — with a warning if a file conflicts.")
+            } primaryAction: {
+                Task { await service.pull() }
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .help(service.selectedRemote.map { "git pull \($0) (⇧⌘P)" } ?? "git pull (⇧⌘P)")
             Button(service.selectedBranchNeedsUpstream ? "Push…" : "Push") {
                 Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
             }

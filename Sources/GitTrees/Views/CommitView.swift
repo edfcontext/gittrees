@@ -21,6 +21,10 @@ struct CommitView: View {
                 }
             }
 
+            if let behind = behindMessage {
+                behindBanner(behind)
+            }
+
             TextEditor(text: $message)
                 .font(GitTreesUI.monospaced)
                 .scrollContentBackground(.hidden)
@@ -74,6 +78,44 @@ struct CommitView: View {
                 commands.commitFocusRequested = false
             }
         }
+    }
+
+    // MARK: - Behind-upstream notice
+
+    /// An informational note that the upstream has commits this branch does not, so a
+    /// commit now will diverge. The count is as of the last fetch — the honest word for
+    /// it — and committing is not blocked; this only surfaces the choice to pull first.
+    private var behindMessage: String? {
+        guard let behind = service.status.behind, behind > 0 else { return nil }
+        let upstream = service.status.upstream ?? "the upstream"
+        let commits = behind == 1 ? "1 commit" : "\(behind) commits"
+        return "\(upstream) has \(commits) you haven't pulled (as of the last fetch). Committing now will diverge from it."
+    }
+
+    /// Offers the fitting remedy inline: a dirty worktree cannot fast-forward, so it gets
+    /// Stash & Apply; a clean one gets a plain Pull.
+    @ViewBuilder
+    private func behindBanner(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Label(text, systemImage: "info.circle")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 4)
+
+            if service.status.isClean {
+                Button("Pull") { Task { await service.pull() } }
+            } else {
+                Button("Stash & Apply") { Task { await service.stashPullAndReapply() } }
+                    .help("Stash your changes, pull, then re-apply them. You'll be told if a file conflicts.")
+            }
+        }
+        .buttonStyle(.link)
+        .font(.caption2)
+        .disabled(service.activeOperation != nil)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(GitTreesUI.hoverFill, in: RoundedRectangle(cornerRadius: GitTreesUI.cornerRadius))
     }
 
     private var stagedCount: Int { service.status.stagedChanges.count }

@@ -823,6 +823,67 @@ struct GitClientIntegrationTests {
         #expect(status.changes.map(\.path) == ["build/out.o"])
     }
 
+    // MARK: - Stash list and diff
+
+    @Test("the stash list reports each entry's message, branch and commit, newest first")
+    func listsStashes() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nfirst\n", to: "README.md")
+        let first = try #require(try await client.stashPush(worktree: fixture.repository, message: "first work"))
+        try fixture.write("hello\nsecond\n", to: "README.md")
+        let second = try #require(try await client.stashPush(worktree: fixture.repository, message: "second work"))
+
+        let stashes = try await client.stashes(repository: fixture.repository)
+        #expect(stashes.count == 2)
+        // Newest first, matching the stack order.
+        #expect(stashes.map(\.commit) == [second, first])
+        #expect(stashes.map(\.message) == ["second work", "first work"])
+        #expect(stashes.allSatisfy { $0.branch == "main" })
+        #expect(stashes[0].selector == "stash@{0}")
+    }
+
+    @Test("a stash diff shows tracked edits and the untracked files it captured")
+    func showsStashDiff() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nedited\n", to: "README.md")
+        try fixture.write("scratch\n", to: "notes/new.txt")
+        let commit = try #require(
+            try await client.stashPush(worktree: fixture.repository, message: "with untracked")
+        )
+
+        let diff = try await client.stashDiff(repository: fixture.repository, commit: commit)
+        #expect(diff.contains("README.md"))
+        #expect(diff.contains("+edited"))
+        // `--include-untracked` means the new file is part of the patch.
+        #expect(diff.contains("notes/new.txt"))
+    }
+
+    @Test("stash push can leave untracked files in place")
+    func stashWithoutUntracked() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\nedited\n", to: "README.md")
+        try fixture.write("scratch\n", to: "leftover.txt")
+        _ = try await client.stashPush(
+            worktree: fixture.repository,
+            message: "tracked only",
+            includeUntracked: false
+        )
+
+        // The tracked edit is stashed; the untracked file is still on disk and reported.
+        let status = try await client.statusSummary(worktree: fixture.repository)
+        #expect(status.changes.map(\.path) == ["leftover.txt"])
+        #expect(status.changes.first?.kind == .untracked)
+    }
+
     // MARK: - Moving changes into a worktree
 
     @Test("a stash round trip carries staged, unstaged and untracked work into a new worktree")
