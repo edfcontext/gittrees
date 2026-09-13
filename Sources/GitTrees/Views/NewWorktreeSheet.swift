@@ -29,6 +29,11 @@ struct NewWorktreeSheet: View {
     @State private var location: String = ""
     /// Once the user edits the path by hand, it stops following the branch name.
     @State private var locationEdited = false
+    /// The last value the suggester wrote into `location`. Used to tell our own updates
+    /// apart from the user's, so a programmatic suggestion is not mistaken for a hand edit
+    /// — the `onChange(of:)` for a programmatic write fires a cycle later, too late for a
+    /// synchronous "restore the flag" to survive.
+    @State private var suggestedLocation = ""
     @State private var openInEditor = false
     @State private var uncommittedChanges: NewWorktreeRequest.UncommittedChanges = .leave
     @State private var ignoreWorktreeRoot = true
@@ -148,7 +153,10 @@ struct NewWorktreeSheet: View {
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .font(GitTreesUI.monospaced)
-                        .onChange(of: location) { _, _ in locationEdited = true }
+                        .onChange(of: location) { _, newValue in
+                            // Only a value we did not write ourselves counts as a hand edit.
+                            if newValue != suggestedLocation { locationEdited = true }
+                        }
 
                     Button("Choose…") { choosingLocation = true }
                 }
@@ -376,6 +384,7 @@ struct NewWorktreeSheet: View {
         guard !locationEdited, let repository = service.repository else { return }
         let branch = chosenBranchName
         guard !branch.trimmingCharacters(in: .whitespaces).isEmpty else {
+            suggestedLocation = ""
             location = ""
             return
         }
@@ -383,11 +392,12 @@ struct NewWorktreeSheet: View {
         let suggestion = WorktreePathSuggester.availablePath(
             WorktreePathSuggester.suggestedPath(worktreeRoot: root, branch: branch)
         )
-        // Assigning to `location` fires onChange, which would otherwise mark the field
-        // as user-edited and freeze the suggestion.
-        let wasEdited = locationEdited
-        location = (suggestion.path as NSString).abbreviatingWithTildeInPath
-        locationEdited = wasEdited
+        // Record what we wrote so the field's onChange recognises it as our own suggestion
+        // rather than a hand edit — otherwise the suggestion would freeze after one
+        // keystroke and the folder name would stall at a truncated prefix of the branch.
+        let suggested = (suggestion.path as NSString).abbreviatingWithTildeInPath
+        suggestedLocation = suggested
+        location = suggested
     }
 
     private func create() {
