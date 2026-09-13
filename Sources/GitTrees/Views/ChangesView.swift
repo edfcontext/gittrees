@@ -33,6 +33,7 @@ struct FileChangeList: View {
     /// A computed binding works for the modifier-click gestures but leaves a plain click
     /// unable to reduce the selection, so the two are kept in step explicitly instead.
     @State private var selection: Set<String> = []
+    @State private var confirmingAbort = false
 
     var body: some View {
         List(selection: $selection) {
@@ -84,6 +85,25 @@ struct FileChangeList: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .confirmationDialog(
+            "\(abortVerb)?",
+            isPresented: $confirmingAbort,
+            titleVisibility: .visible
+        ) {
+            Button(abortVerb, role: .destructive) { Task { await service.abortMerge() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This discards the in-progress \(mergeNoun) and returns the worktree to the branch as it was. Your committed work is untouched.")
+        }
+    }
+
+    /// "Abort Merge" / "Abort Rebase", to match what is actually in progress.
+    private var abortVerb: String {
+        service.mergeOperation == .rebase ? "Abort Rebase" : "Abort Merge"
+    }
+
+    private var mergeNoun: String {
+        service.mergeOperation == .rebase ? "rebase" : "merge"
     }
 
     private enum RowAction {
@@ -143,6 +163,25 @@ struct FileChangeList: View {
         let toStage = rows.filter { !$0.staged }.map(\.change)
         let toUnstage = rows.filter(\.staged).map(\.change)
         let untracked = rows.map(\.change).filter { $0.kind == .untracked }
+        let conflicted = rows.map(\.change).filter(\.isConflicted)
+
+        // Quick, whole-file conflict resolution, above the plain stage/unstage actions.
+        if !conflicted.isEmpty {
+            Button(count(conflicted, one: "Use Mine (Discard Theirs)", many: { "Use Mine for \($0) Files" })) {
+                Task { await service.resolveConflicts(conflicted, keeping: .mine) }
+            }
+            Button(count(conflicted, one: "Use Theirs (Discard Mine)", many: { "Use Theirs for \($0) Files" })) {
+                Task { await service.resolveConflicts(conflicted, keeping: .theirs) }
+            }
+            Button(count(conflicted, one: "Discard — Restore From Branch", many: { "Restore \($0) Files From Branch" })) {
+                Task { await service.discardConflicts(conflicted) }
+            }
+            if service.mergeOperation != .none {
+                Divider()
+                Button("\(abortVerb)…", role: .destructive) { confirmingAbort = true }
+            }
+            Divider()
+        }
 
         if !toStage.isEmpty {
             Button(stageTitle(for: toStage)) { Task { await service.stage(toStage) } }

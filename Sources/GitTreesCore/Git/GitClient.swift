@@ -303,6 +303,83 @@ public final class GitClient: Sendable {
         return !result.stdout.isEmpty
     }
 
+    // MARK: - Conflict resolution
+
+    /// A multi-step Git operation that a conflict interrupted, so callers can abort the
+    /// right one and map "mine"/"theirs" correctly (rebase swaps the two sides).
+    public enum InProgressOperation: Sendable, Equatable {
+        case none
+        case merge
+        case rebase
+    }
+
+    /// Which side of a conflict to take. In the index of an unmerged file, `ours` is
+    /// stage 2 and `theirs` is stage 3 — present whenever the file is unmerged, so this
+    /// works during a merge, a rebase, or a stash apply alike.
+    public enum ConflictSide: Sendable {
+        case ours
+        case theirs
+
+        var flag: String {
+            switch self {
+            case .ours: "--ours"
+            case .theirs: "--theirs"
+            }
+        }
+    }
+
+    /// What long-running operation, if any, a conflict is currently part of.
+    ///
+    /// `MERGE_HEAD` and the `rebase-*` directories live in the *per-worktree* git dir, so
+    /// this is asked in the worktree itself, not the shared common dir. A stash-apply
+    /// conflict is neither — it reports `.none`, and there is nothing to abort.
+    public func inProgressOperation(worktree: URL) async throws -> InProgressOperation {
+        let mergeHead = try await run(
+            ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+            in: worktree,
+            acceptableExitCodes: [0, 1]
+        )
+        if mergeHead.exitCode == 0 { return .merge }
+
+        let gitDir = try await run(["rev-parse", "--absolute-git-dir"], in: worktree).trimmedStdout
+        guard !gitDir.isEmpty else { return .none }
+        let base = URL(fileURLWithPath: gitDir)
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: base.appendingPathComponent("rebase-merge").path)
+            || fileManager.fileExists(atPath: base.appendingPathComponent("rebase-apply").path) {
+            return .rebase
+        }
+        return .none
+    }
+
+    /// Resolves one conflicted path by taking a whole side, then staging it so the entry
+    /// is no longer unmerged. Reads the chosen stage from the index, so it needs no
+    /// in-progress merge.
+    public func resolveConflict(worktree: URL, path: String, keeping side: ConflictSide) async throws {
+        _ = try await run(["checkout", side.flag, "--", path], in: worktree)
+        _ = try await run(["add", "--", path], in: worktree)
+    }
+
+    /// Resolves one conflicted path by restoring the branch's committed version (`HEAD`),
+    /// discarding both conflicting sides for that file, then staging it.
+    public func discardConflict(worktree: URL, path: String) async throws {
+        _ = try await run(["checkout", "HEAD", "--", path], in: worktree)
+        _ = try await run(["add", "--", path], in: worktree)
+    }
+
+    /// Aborts the in-progress merge or rebase, returning the worktree to the branch as it
+    /// was before it started. Nothing to do when no such operation is running.
+    public func abortInProgressOperation(worktree: URL, operation: InProgressOperation) async throws {
+        switch operation {
+        case .merge:
+            _ = try await run(["merge", "--abort"], in: worktree)
+        case .rebase:
+            _ = try await run(["rebase", "--abort"], in: worktree)
+        case .none:
+            break
+        }
+    }
+
     // MARK: - Ignore rules
 
     /// The parts of an ignore preview that do not depend on the candidate rule.
@@ -565,11 +642,48 @@ public final class GitClient: Sendable {
     }
 
     /// Pulls. With no remote, Git uses the branch's own tracking configuration.
-    public func pull(worktree: URL, remote: String? = nil) async throws -> String {
-        var arguments = ["pull"]
-        if let remote, !remote.isEmpty { arguments.append(remote) }
+    /// How `git pull` should reconcile a branch that has diverged from its upstream.
+    ///
+    /// Passed explicitly on every pull so the result does not depend on whether the user
+    /// happens to have `pull.rebase` set — an unset one makes modern Git refuse a
+    /// divergent pull outright.
+    public enum PullStrategy: String, Sendable, CaseIterable {
+        case merge
+        case rebase
+        case fastForwardOnly
+
+        var flag: String {
+            switch self {
+            case .merge: "--no-rebase"
+            case .rebase: "--rebase"
+            case .fastForwardOnly: "--ff-only"
+            }
+        }
+    }
+
+    /// `git pull [<strategy>] [<remote> [<branch>]]`.
+    ///
+    /// Naming a `branch` (with a `remote`) pulls a specific remote branch without relying
+    /// on tracking configuration — the path taken for a branch that has no upstream yet.
+    public func pull(
+        worktree: URL,
+        remote: String? = nil,
+        branch: String? = nil,
+        strategy: PullStrategy = .merge
+    ) async throws -> String {
+        var arguments = ["pull", strategy.flag]
+        if let remote, !remote.isEmpty {
+            arguments.append(remote)
+            if let branch, !branch.isEmpty { arguments.append(branch) }
+        }
         let result = try await run(arguments, in: worktree)
         return result.stdoutText + result.stderrText
+    }
+
+    /// `git branch --set-upstream-to=<ref>` for the branch checked out in `worktree`, so
+    /// later bare pulls and pushes track it.
+    public func setUpstream(worktree: URL, to ref: String) async throws {
+        _ = try await run(["branch", "--set-upstream-to=\(ref)"], in: worktree)
     }
 
     /// Pushes the current branch.
@@ -649,9 +763,11 @@ public final class GitClient: Sendable {
     ].joined(separator: "%x00")
 
     /// A flat, chronological commit list. Rendering a commit graph is out of scope.
-    public func log(worktree: URL, limit: Int = 200) async throws -> [CommitSummary] {
+    /// `revisions` restricts which commits are listed, e.g. `["main..HEAD"]` for the
+    /// commits on this branch since it left `main`. Empty lists the branch tip's history.
+    public func log(worktree: URL, limit: Int = 200, revisions: [String] = []) async throws -> [CommitSummary] {
         let result = try await run(
-            ["log", "--max-count=\(limit)", "-z", "--format=\(Self.logFormat)"],
+            ["log", "--max-count=\(limit)", "-z", "--format=\(Self.logFormat)"] + revisions,
             in: worktree,
             acceptableExitCodes: [0, 128]
         )

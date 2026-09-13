@@ -142,6 +142,9 @@ public final class RepositoryService {
     public private(set) var gitHubAuth: GitHubAuth = .unknown
     /// The pull request already open for the selected worktree's branch, if any.
     public private(set) var pullRequest: PullRequest?
+    /// The merge or rebase the selected worktree is in the middle of, when its status
+    /// shows conflicts — so the UI can offer the right Abort and map ours/theirs.
+    public private(set) var mergeOperation: GitClient.InProgressOperation = .none
     /// The repository's stash stack, newest first. Shared across worktrees.
     public private(set) var stashes: [Stash] = []
     /// The stash whose diff the Stashes panel is showing, addressed by commit.
@@ -551,17 +554,25 @@ public final class RepositoryService {
         guard let worktree = selectedWorktree, !worktree.isBare, !worktree.isMissingOnDisk else {
             status = .empty
             history = []
+            mergeOperation = .none
             return
         }
+        let logRevisions = historyRevisions(for: worktree)
         statusTask = Task { [weak self] in
             guard let self else { return }
             do {
                 async let statusResult = self.client.statusSummary(worktree: worktree.path)
-                async let logResult = self.client.log(worktree: worktree.path, limit: 200)
+                async let logResult = self.client.log(worktree: worktree.path, limit: 200, revisions: logRevisions)
                 let (loadedStatus, loadedHistory) = try await (statusResult, logResult)
+                // Only when there are conflicts is it worth asking which operation is in
+                // progress; otherwise it is always `.none` and the extra call is waste.
+                let operation: GitClient.InProgressOperation = loadedStatus.conflicts.isEmpty
+                    ? .none
+                    : ((try? await self.client.inProgressOperation(worktree: worktree.path)) ?? .none)
                 guard !Task.isCancelled, self.selectedWorktreePath == worktree.id else { return }
                 self.status = loadedStatus
                 self.history = loadedHistory
+                self.mergeOperation = operation
                 self.reconcileSelectedFile()
             } catch is CancellationError {
                 return
@@ -570,6 +581,33 @@ public final class RepositoryService {
                 self.lastError = PresentableError(title: "Could Not Read Status", error: error)
             }
         }
+    }
+
+    /// The `git log` revision arguments for the History panel: empty for the full history
+    /// behind the branch tip, or `["<base>..HEAD"]` when limited to the current branch.
+    ///
+    /// Returns empty (full history) when the toggle is off or no base branch can be
+    /// resolved — better to show everything than to silently show nothing.
+    private func historyRevisions(for worktree: Worktree) -> [String] {
+        guard preferences.historyCurrentBranchOnly,
+              let base = historyBaseRef(for: worktree)
+        else { return [] }
+        return ["\(base)..HEAD"]
+    }
+
+    /// The default branch to measure "this branch's commits" against — a local
+    /// `main`/`master`/`develop`, else the remote's equivalent. Nil when none exists, so
+    /// the filter falls back to full history rather than an empty list.
+    private func historyBaseRef(for worktree: Worktree) -> String? {
+        let localNames = Set(localBranches.map(\.name))
+        for name in ["main", "master", "develop"] where localNames.contains(name) {
+            return name
+        }
+        let remoteNames = Set(remoteBranches.map(\.name))
+        for name in ["origin/main", "origin/master", "origin/develop"] where remoteNames.contains(name) {
+            return name
+        }
+        return nil
     }
 
     /// Carries the selection across a refresh: rows that are still there stay selected,
@@ -1040,6 +1078,87 @@ public final class RepositoryService {
         }
     }
 
+    // MARK: - Conflict resolution
+
+    /// Which working copy to keep for a conflicted file, in the user's terms rather than
+    /// Git's stage numbers.
+    public enum ConflictChoice: Sendable {
+        /// This branch's own work.
+        case mine
+        /// The incoming side being merged, rebased, or applied.
+        case theirs
+    }
+
+    /// Resolves conflicted files by taking one whole side, in one operation and refresh.
+    ///
+    /// "Mine"/"theirs" is mapped to Git's ours/theirs per the operation in progress: a
+    /// merge (and a stash apply) keeps mine = ours, but a rebase replays your commits as
+    /// *theirs*, so the two are swapped there — this keeps "Mine" meaning your work in
+    /// both.
+    public func resolveConflicts(_ changes: [FileChange], keeping choice: ConflictChoice) async {
+        guard let worktree = selectedWorktree else { return }
+        let conflicted = changes.filter(\.isConflicted)
+        guard !conflicted.isEmpty else { return }
+        let paths = conflicted.map(\.path)
+
+        _ = await withOperation(label: "Resolving…", worktree: worktree) { [client] in
+            let operation = try await client.inProgressOperation(worktree: worktree.path)
+            let side: GitClient.ConflictSide
+            switch (choice, operation) {
+            case (.mine, .rebase): side = .theirs
+            case (.mine, _): side = .ours
+            case (.theirs, .rebase): side = .ours
+            case (.theirs, _): side = .theirs
+            }
+            for path in paths {
+                try await client.resolveConflict(worktree: worktree.path, path: path, keeping: side)
+            }
+        } onFailure: { error in
+            PresentableError(title: "Could Not Resolve Conflict", error: error)
+        } thenReturning: { [weak self] in
+            self?.refreshSelectedWorktree()
+        }
+    }
+
+    /// Resolves conflicted files by discarding both sides and restoring the branch's
+    /// committed version (`HEAD`).
+    public func discardConflicts(_ changes: [FileChange]) async {
+        guard let worktree = selectedWorktree else { return }
+        let paths = changes.filter(\.isConflicted).map(\.path)
+        guard !paths.isEmpty else { return }
+
+        _ = await withOperation(label: "Restoring…", worktree: worktree) { [client] in
+            for path in paths {
+                try await client.discardConflict(worktree: worktree.path, path: path)
+            }
+        } onFailure: { error in
+            PresentableError(title: "Could Not Restore File", error: error)
+        } thenReturning: { [weak self] in
+            self?.refreshSelectedWorktree()
+        }
+    }
+
+    /// Aborts the in-progress merge or rebase, returning the worktree to the branch as it
+    /// was before it began. Only meaningful while `mergeOperation` is not `.none`.
+    public func abortMerge() async {
+        guard let worktree = selectedWorktree else { return }
+        _ = await withOperation(label: "Aborting…", worktree: worktree) { [client] in
+            let operation = try await client.inProgressOperation(worktree: worktree.path)
+            guard operation != .none else {
+                throw GitError.unexpectedOutput(
+                    reason: "there is no merge or rebase in progress to abort",
+                    arguments: ["merge", "--abort"]
+                )
+            }
+            try await client.abortInProgressOperation(worktree: worktree.path, operation: operation)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Abort", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+        }
+    }
+
     // MARK: - Ignore rules
 
     /// The file a destination resolves to, for the sheet to show and write to.
@@ -1239,10 +1358,71 @@ public final class RepositoryService {
         }
     }
 
-    public func pull() async {
-        let remote = selectedRemote
+    /// How the selected worktree should pull: which remote/branch to name, and whether to
+    /// set an upstream first. Sendable so it can cross into the off-main operation body.
+    private struct PullPlan: Sendable {
+        var remote: String?
+        var branch: String?
+        /// A ref to set as the branch's upstream before pulling, for a branch that has none.
+        var setUpstreamTo: String?
+    }
+
+    /// Works out how to pull the selected worktree, or sets `lastError` and returns nil
+    /// explaining why it cannot.
+    ///
+    /// A branch with an upstream pulls normally. A branch without one, whose name matches
+    /// a branch on the resolved remote, gets that ref set as its upstream and then pulls —
+    /// turning the two-step "set upstream, then pull" into one action. A branch with no
+    /// upstream and no matching remote branch has nothing to pull from, and says so
+    /// instead of letting Git emit its raw "no tracking information" error.
+    private func pullPlan() -> PullPlan? {
+        guard let worktree = selectedWorktree else {
+            lastError = PresentableError(title: "Pull Failed", message: "No worktree is selected.")
+            return nil
+        }
+        if !selectedBranchNeedsUpstream {
+            return PullPlan(remote: selectedRemote, branch: nil, setUpstreamTo: nil)
+        }
+        guard let branchName = worktree.branchName else {
+            lastError = PresentableError(
+                title: "Pull Failed",
+                message: "This worktree has a detached HEAD, so there is no branch to pull into."
+            )
+            return nil
+        }
+        guard let remote = remoteForPublishing else {
+            lastError = PresentableError(
+                title: "Pull Failed",
+                message: "\(branchName) has no upstream and the repository has no remotes to pull from.",
+                detail: "Add a remote with git remote add, then push or pull again."
+            )
+            return nil
+        }
+        let matchName = "\(remote)/\(branchName)"
+        guard remoteBranches.contains(where: { $0.name == matchName }) else {
+            lastError = PresentableError(
+                title: "Pull Failed",
+                message: "\(branchName) has no upstream to pull from.",
+                detail: "There is no \(matchName) to track. Push this branch first to publish it."
+            )
+            return nil
+        }
+        // Set the upstream, then pull through tracking — future pulls need no remote named.
+        return PullPlan(remote: nil, branch: nil, setUpstreamTo: matchName)
+    }
+
+    public func pull(strategy: GitClient.PullStrategy = .merge) async {
+        guard let plan = pullPlan() else { return }
         await runRemoteOperation(label: "Pulling…", title: "Pull Failed") { [client] worktree in
-            try await client.pull(worktree: worktree.path, remote: remote)
+            if let ref = plan.setUpstreamTo {
+                try await client.setUpstream(worktree: worktree.path, to: ref)
+            }
+            return try await client.pull(
+                worktree: worktree.path,
+                remote: plan.remote,
+                branch: plan.branch,
+                strategy: strategy
+            )
         }
     }
 
@@ -1263,8 +1443,12 @@ public final class RepositoryService {
     /// restore the staged/unstaged split (`git stash apply` without `--index`): after the
     /// pull moved HEAD, a plain apply is what reliably lands the changes on the new base,
     /// and a conflict could not preserve the split anyway.
-    public func stashPullAndReapply() async {
+    public func stashPullAndReapply(strategy: GitClient.PullStrategy = .merge) async {
         guard let worktree = selectedWorktree else { return }
+        // Resolve the pull the same way a plain Pull does — upstream handling and the
+        // reconcile strategy included — before touching the stash, so a branch that can't
+        // be pulled fails cleanly with nothing stashed.
+        guard let plan = pullPlan() else { return }
         guard claim(worktree) else {
             lastError = PresentableError(
                 title: "Operation In Progress",
@@ -1273,7 +1457,6 @@ public final class RepositoryService {
             return
         }
         defer { release(worktree) }
-        let remote = selectedRemote
 
         let outcome = await withOperation(
             label: "Stashing, pulling and re-applying…",
@@ -1281,17 +1464,29 @@ public final class RepositoryService {
         ) { [client] () -> StashPullOutcome in
             let path = worktree.path
 
+            func pull() async throws -> String {
+                if let ref = plan.setUpstreamTo {
+                    try await client.setUpstream(worktree: path, to: ref)
+                }
+                return try await client.pull(
+                    worktree: path,
+                    remote: plan.remote,
+                    branch: plan.branch,
+                    strategy: strategy
+                )
+            }
+
             guard let stash = try await client.stashPush(
                 worktree: path,
                 message: "GitTrees: stash & apply"
             ) else {
                 // Nothing to stash — this is just a pull.
-                return .clean(output: try await client.pull(worktree: path, remote: remote))
+                return .clean(output: try await pull())
             }
 
             let output: String
             do {
-                output = try await client.pull(worktree: path, remote: remote)
+                output = try await pull()
             } catch {
                 // The pull failed. If it left the tree untouched, put the changes straight
                 // back; if it conflicted or half-applied, don't compound it — keep the
@@ -1506,11 +1701,14 @@ public final class RepositoryService {
             try await body(worktree)
         } onFailure: { error in
             PresentableError(title: title, error: error)
-        } thenReturning: { [weak self] output -> String in
-            await self?.reload()
-            self?.refreshSelectedWorktree()
-            return output
-        }
+        } thenReturning: { output in output }
+
+        // Refresh whether or not it succeeded: a pull that conflicts, or a push that is
+        // rejected, leaves the worktree in a state the Changes view must show — a merge
+        // conflict in particular only becomes resolvable once its files appear here.
+        await reload()
+        refreshSelectedWorktree()
+
         if let output {
             lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
         }

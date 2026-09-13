@@ -823,6 +823,37 @@ struct GitClientIntegrationTests {
         #expect(status.changes.map(\.path) == ["build/out.o"])
     }
 
+    // MARK: - History filtering
+
+    @Test("a revision range limits the log to the current branch's own commits")
+    func logLimitedToCurrentBranch() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        // A feature branch off main with two commits of its own.
+        try await fixture.git(["checkout", "--quiet", "-b", "feature/x"])
+        try fixture.write("one\n", to: "feature-a.txt")
+        try await fixture.git(["add", "-A"])
+        try await fixture.git(["commit", "--quiet", "--message", "feature commit 1"])
+        try fixture.write("two\n", to: "feature-b.txt")
+        try await fixture.git(["add", "-A"])
+        try await fixture.git(["commit", "--quiet", "--message", "feature commit 2"])
+
+        // Full history includes main's "initial commit" behind the two feature commits.
+        let full = try await client.log(worktree: fixture.repository)
+        #expect(full.count == 3)
+
+        // Limited to main..HEAD, only the branch's own commits remain, newest first.
+        let branchOnly = try await client.log(worktree: fixture.repository, revisions: ["main..HEAD"])
+        #expect(branchOnly.map(\.subject) == ["feature commit 2", "feature commit 1"])
+
+        // On the base branch itself, main..HEAD is empty rather than an error.
+        try await fixture.git(["checkout", "--quiet", "main"])
+        let onMain = try await client.log(worktree: fixture.repository, revisions: ["main..HEAD"])
+        #expect(onMain.isEmpty)
+    }
+
     // MARK: - Stash list and diff
 
     @Test("the stash list reports each entry's message, branch and commit, newest first")

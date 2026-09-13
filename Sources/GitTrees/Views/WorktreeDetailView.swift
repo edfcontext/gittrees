@@ -221,15 +221,18 @@ struct WorktreeHeaderBar: View {
             Button("Fetch") { Task { await service.fetch() } }
                 .help(service.selectedRemote.map { "git fetch \($0) (⇧⌘F)" } ?? "git fetch --all (⇧⌘F)")
             Menu("Pull") {
-                Button("Pull") { Task { await service.pull() } }
+                Button("Pull (Merge)") { Task { await service.pull(strategy: .merge) } }
+                Button("Pull (Rebase)") { Task { await service.pull(strategy: .rebase) } }
+                Button("Pull (Fast-Forward Only)") { Task { await service.pull(strategy: .fastForwardOnly) } }
+                Divider()
                 Button("Stash, Pull & Re-apply") { Task { await service.stashPullAndReapply() } }
-                    .help("Stash local changes, pull, then re-apply them — with a warning if a file conflicts.")
+                    .help("Stash local changes, pull (merge), then re-apply them — with a warning if a file conflicts.")
             } primaryAction: {
-                Task { await service.pull() }
+                Task { await service.pull(strategy: .merge) }
             }
             .menuStyle(.button)
             .fixedSize()
-            .help(service.selectedRemote.map { "git pull \($0) (⇧⌘P)" } ?? "git pull (⇧⌘P)")
+            .help("Pull (merge) with ⇧⌘P. Diverged branches merge by default; the menu offers rebase or fast-forward-only.")
             Button(service.selectedBranchNeedsUpstream ? "Push…" : "Push") {
                 Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
             }

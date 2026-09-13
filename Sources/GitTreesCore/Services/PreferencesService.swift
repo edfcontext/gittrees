@@ -21,6 +21,7 @@ public final class PreferencesService {
         static let diffContextLines = "diffContextLines"
         static let showRemoteBranches = "showRemoteBranches"
         static let autoFetchOnActivation = "autoFetchOnActivation"
+        static let historyCurrentBranchOnly = "historyCurrentBranchOnly"
         static let preferredRemotes = "preferredRemotes"
         static let lastWorkspaceParent = "lastWorkspaceParent"
     }
@@ -43,6 +44,7 @@ public final class PreferencesService {
         self.diffContextLines = defaults.object(forKey: Key.diffContextLines) as? Int ?? 3
         self.showRemoteBranches = defaults.object(forKey: Key.showRemoteBranches) as? Bool ?? false
         self.autoFetchOnActivation = defaults.object(forKey: Key.autoFetchOnActivation) as? Bool ?? true
+        self.historyCurrentBranchOnly = defaults.object(forKey: Key.historyCurrentBranchOnly) as? Bool ?? false
         self.recentRepositories = Self.decode([RecentRepository].self, from: defaults, key: Key.recentRepositories) ?? []
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
         self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
@@ -100,6 +102,12 @@ public final class PreferencesService {
     /// A fetch is read-only; it never changes the working tree.
     public var autoFetchOnActivation: Bool {
         didSet { defaults.set(autoFetchOnActivation, forKey: Key.autoFetchOnActivation) }
+    }
+
+    /// Whether the History panel is limited to commits on the current branch since it
+    /// left the default branch (`main`/`master`), rather than the full history behind it.
+    public var historyCurrentBranchOnly: Bool {
+        didSet { defaults.set(historyCurrentBranchOnly, forKey: Key.historyCurrentBranchOnly) }
     }
 
     public private(set) var recentRepositories: [RecentRepository] {

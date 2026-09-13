@@ -8,6 +8,7 @@ import SwiftUI
 /// and "what did this commit change". Graph rendering is out of scope.
 struct HistoryView: View {
     @Environment(RepositoryService.self) private var service
+    @Environment(PreferencesService.self) private var preferences
 
     @State private var selectedCommitID: CommitSummary.ID?
     @State private var detail: CommitDetail?
@@ -19,30 +20,10 @@ struct HistoryView: View {
     @State private var diffError: String?
 
     var body: some View {
-        Group {
-            if service.history.isEmpty {
-                ContentUnavailableView(
-                    "No Commits",
-                    systemImage: "clock",
-                    description: Text("This worktree has no commit history yet.")
-                )
-            } else {
-                VSplitView {
-                    commitTable
-                        .frame(minHeight: 110, idealHeight: 220)
-
-                    CommitInspector(
-                        detail: detail,
-                        selectedFileID: $selectedFileID,
-                        diffText: diffText,
-                        isLoadingDetail: isLoadingDetail,
-                        isLoadingDiff: isLoadingDiff,
-                        detailError: detailError,
-                        diffError: diffError
-                    )
-                    .frame(minHeight: 180)
-                }
-            }
+        VStack(spacing: 0) {
+            filterBar
+            Divider()
+            content
         }
         .contextMenu {
             if let commit = selectedCommit {
@@ -61,6 +42,59 @@ struct HistoryView: View {
         }
         .onChange(of: service.selectedWorktreePath) { _, _ in
             selectedCommitID = nil
+        }
+    }
+
+    // MARK: - Filter
+
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            Toggle("Current branch only", isOn: Binding(
+                get: { preferences.historyCurrentBranchOnly },
+                set: {
+                    preferences.historyCurrentBranchOnly = $0
+                    service.refreshSelectedWorktree()
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.caption)
+            .help("Show only the commits on this branch since it diverged from the default branch (main/master). Off shows the full history behind the branch tip.")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(GitTreesUI.barBackground)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if service.history.isEmpty {
+            ContentUnavailableView(
+                preferences.historyCurrentBranchOnly ? "No Branch-Only Commits" : "No Commits",
+                systemImage: "clock",
+                description: Text(
+                    preferences.historyCurrentBranchOnly
+                        ? "This branch has no commits beyond the default branch. Turn off “Current branch only” to see the full history."
+                        : "This worktree has no commit history yet."
+                )
+            )
+        } else {
+            VSplitView {
+                commitTable
+                    .frame(minHeight: 110, idealHeight: 220)
+
+                CommitInspector(
+                    detail: detail,
+                    selectedFileID: $selectedFileID,
+                    diffText: diffText,
+                    isLoadingDetail: isLoadingDetail,
+                    isLoadingDiff: isLoadingDiff,
+                    detailError: detailError,
+                    diffError: diffError
+                )
+                .frame(minHeight: 180)
+            }
         }
     }
 
