@@ -236,6 +236,9 @@ final class AppCommands {
     var branchChangesRequested = false
     /// Open the Stash sheet for the selected worktree.
     var stashRequested = false
+    /// A drafted commit subject offered by Stage All, for the commit editor to adopt when
+    /// its own message is still empty.
+    var pendingCommitMessage: String?
 
     func openRepository() { openRepositoryRequested = true }
     func newWorktree() { newWorktreeRequested = true }
@@ -249,6 +252,9 @@ final class AppCommands {
     func ignore(path: String) { ignoreRequest = IgnoreRequest(path: path) }
     func branchChanges() { branchChangesRequested = true }
     func stash() { stashRequested = true }
+    func suggestCommitMessage(_ message: String) {
+        if !message.isEmpty { pendingCommitMessage = message }
+    }
 }
 
 /// Menu commands target the key repository window.

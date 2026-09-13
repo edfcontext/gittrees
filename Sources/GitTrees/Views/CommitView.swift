@@ -65,6 +65,15 @@ struct CommitView: View {
 
                 Spacer(minLength: 0)
 
+                Button {
+                    message = CommitMessageDrafter.draft(for: service.status.stagedChanges)
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+                .buttonStyle(.borderless)
+                .disabled(stagedCount == 0)
+                .help("Draft a short subject from the staged changes. Replaces the current message.")
+
                 Button("Commit") { commit() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!canCommit)
@@ -77,6 +86,15 @@ struct CommitView: View {
                 messageFocused = true
                 commands.commitFocusRequested = false
             }
+        }
+        .onChange(of: commands.pendingCommitMessage) { _, pending in
+            guard let pending else { return }
+            // Stage All offers a draft; adopt it only when the editor is untouched, so a
+            // message the user has already started is never overwritten.
+            if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                message = pending
+            }
+            commands.pendingCommitMessage = nil
         }
     }
 

@@ -137,12 +137,19 @@ struct FileChangeList: View {
                     SectionHeaderLabel(title: title, count: changes.count)
                     if let action {
                         Button(action == .stage ? "Stage All" : "Unstage All") {
-                            Task {
-                                if action == .stage {
+                            if action == .stage {
+                                // Drafted from the full set that will be staged — the
+                                // already-staged plus these — so the offer does not race
+                                // the async status refresh.
+                                let draft = CommitMessageDrafter.draft(
+                                    for: service.status.stagedChanges + changes
+                                )
+                                Task {
                                     await service.stage(changes)
-                                } else {
-                                    await service.unstage(changes)
+                                    commands.suggestCommitMessage(draft)
                                 }
+                            } else {
+                                Task { await service.unstage(changes) }
                             }
                         }
                         .buttonStyle(.link)
