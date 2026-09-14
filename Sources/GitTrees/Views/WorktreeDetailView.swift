@@ -16,6 +16,7 @@ struct WorktreeDetailView: View {
     @Environment(RepositoryService.self) private var service
     @Environment(PreferencesService.self) private var preferences
     @Environment(WorkspaceLauncher.self) private var launcher
+    @Environment(\.scenePhase) private var scenePhase
 
     let worktree: Worktree
     let onRequestRemoval: (Worktree) -> Void
@@ -62,6 +63,15 @@ struct WorktreeDetailView: View {
             }
         }
         .background(GitTreesUI.barBackground)
+        // Re-read status when the app returns to the foreground. The service also refreshes
+        // from AppKit activation notifications, but a mutation made from that detached path
+        // is sometimes missed by this already-mounted view (the Changes list then stays
+        // stale until a manual Refresh or a tab switch). Driving the refresh from a
+        // SwiftUI-observed `scenePhase` change keeps the view in the update cycle, the way
+        // the Refresh button does.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { service.refreshSelectedWorktree() }
+        }
     }
 
     /// The tab's name, with a stash count so the user can see stashes exist without
