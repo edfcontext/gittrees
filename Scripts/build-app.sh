@@ -18,10 +18,23 @@ cd "$ROOT_DIR"
 swift build -c "$CONFIGURATION"
 
 BINARY="$(swift build -c "$CONFIGURATION" --show-bin-path)/GitTrees"
+BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/GitTrees"
+
+# SwiftPM resource bundles (tokenizer, Core ML package) live next to the executable.
+# Without them Bundle.module cannot find CommitIntentModel inside the .app.
+while IFS= read -r bundle; do
+    cp -R "$bundle" "$MACOS_DIR/"
+done < <(find "$BIN_DIR" -maxdepth 1 -name "*.bundle")
+
+# Also copy the model directory into Contents/Resources as a Bundle.main fallback.
+CORE_MODEL="$ROOT_DIR/Sources/GitTreesCore/Resources/CommitIntentModel"
+if [[ -d "$CORE_MODEL" ]]; then
+    cp -R "$CORE_MODEL" "$RESOURCES_DIR/CommitIntentModel"
+fi
 
 # Icon artwork, most specific first. A square PNG of at least 512x512 works best;
 # the macOS squircle and its margin should already be part of the artwork.

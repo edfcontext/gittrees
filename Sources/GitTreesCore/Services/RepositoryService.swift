@@ -1285,6 +1285,12 @@ public final class RepositoryService {
 
     // MARK: - Diff
 
+    /// Unified diff of the current index, for the commit-intent model.
+    public func stagedDiff() async throws -> String {
+        guard let worktree = selectedWorktree else { return "" }
+        return try await client.stagedDiff(worktree: worktree.path)
+    }
+
     /// The unified diff for one file, for either side of the index.
     public func diff(for change: FileChange, staged: Bool) async throws -> String {
         guard let worktree = selectedWorktree else { return "" }

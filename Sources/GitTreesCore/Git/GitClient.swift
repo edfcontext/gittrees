@@ -597,6 +597,18 @@ public final class GitClient: Sendable {
 
     // MARK: - Diff
 
+    /// Unified diff of everything currently in the index (`git diff --cached`).
+    ///
+    /// This is the raw text the commit-intent model normalizes. Context lines are
+    /// dropped by `DiffNormalizer`; `-U3` matches the `git show -p` diffs used to train.
+    public func stagedDiff(worktree: URL, contextLines: Int = 3) async throws -> String {
+        let result = try await run(
+            ["diff", "--cached", "--no-color", "--no-ext-diff", "-U\(contextLines)"],
+            in: worktree
+        )
+        return result.stdoutText
+    }
+
     /// Unified diff for one path. `staged` selects `--cached` (index vs HEAD) instead of
     /// the working tree vs index comparison.
     public func diff(worktree: URL, path: String, staged: Bool, contextLines: Int = 3) async throws -> String {

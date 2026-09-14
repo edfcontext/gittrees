@@ -1,0 +1,31 @@
+{
+  "swift_diff": "diff --git a/Sources/Git/WorktreeManager.swift b/Sources/Git/WorktreeManager.swift\nindex 1..2 100644\n--- a/Sources/Git/WorktreeManager.swift\n+++ b/Sources/Git/WorktreeManager.swift\n@@ -1,3 +1,4 @@\n-    func deleteWorktree(_ w: Worktree) {\n+    func deleteWorktree(_ w: Worktree, force: Bool) {\n+        removeBranch(w.branch)\n     }\ndiff --git a/pkg/package-lock.json b/pkg/package-lock.json\n--- a/pkg/package-lock.json\n+++ b/pkg/package-lock.json\n@@ -1 +1 @@\n-old\n+lockfile noise\n",
+  "swift_normalized": "[FILES]\nM Sources/Git/WorktreeManager.swift\nM pkg/package-lock.json\n[STATS]\nfiles=2 added=3 deleted=2\n[SYMBOLS]\ndeleteWorktree\n[DIFF]\n- func deleteWorktree(_ w: Worktree) {\n+ func deleteWorktree(_ w: Worktree, force: Bool) {\n+ removeBranch(w.branch)",
+  "swift_symbols": [
+    "deleteWorktree"
+  ],
+  "swift_object": "worktree package",
+  "demo_diff": "diff --git a/Sources/Git/WorktreeManager.swift b/Sources/Git/WorktreeManager.swift\n--- a/Sources/Git/WorktreeManager.swift\n+++ b/Sources/Git/WorktreeManager.swift\n@@ -10,7 +10,9 @@ final class WorktreeManager {\n-    func deleteWorktree(_ w: Worktree) {\n+    func deleteWorktree(_ w: Worktree, force: Bool) throws {\n+        guard !w.isDirty || force else { throw GitError.dirty }\n+        removeBranch(w.branch)\n         refreshWorktrees()\n     }\n",
+  "demo_normalized": "[FILES]\nM Sources/Git/WorktreeManager.swift\n[STATS]\nfiles=1 added=3 deleted=1\n[SYMBOLS]\ndeleteWorktree\n[DIFF]\n- func deleteWorktree(_ w: Worktree) {\n+ func deleteWorktree(_ w: Worktree, force: Bool) throws {\n+ guard !w.isDirty || force else { throw GitError.dirty }\n+ removeBranch(w.branch)",
+  "demo_symbols": [
+    "deleteWorktree"
+  ],
+  "demo_object": "worktree",
+  "multilang_symbols": [
+    "parse_commit",
+    "BranchView",
+    "RefreshWorktrees",
+    "loadStatus"
+  ],
+  "if_symbols": [],
+  "truncated": "[FILES]\nM x.py\n[STATS]\nfiles=1 added=500 deleted=0\n[SYMBOLS]\n(none)\n[DIFF]\n+ line number 0 with words\n+ line number 1 with words\n+ line number 2 with words\n+ line number 3 with words\n+ line number 4 with words\n+ line number 5 with words\n+ line number 6 with words\n+ line number 7 with words\n... (diff truncated)",
+  "renders": {
+    "fix_worktree": "Fix worktree handling",
+    "add_branch": "Add branch support",
+    "update_settings": "Update settings handling",
+    "handle_object": "Handle worktree deletion",
+    "conventional": "fix(worktree): handle worktree deletion",
+    "general_no_object": "Update changes",
+    "add_general": "Add changes"
+  }
+}

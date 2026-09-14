@@ -1,0 +1,11 @@
+{
+  "name": "gittrees-commit-intent",
+  "version": "0.1.0",
+  "runtime": "coreml",
+  "modelType": "multi-head-classifier",
+  "maxTokens": 256,
+  "encoder": "sentence-transformers/all-MiniLM-L6-v2",
+  "outputs": ["type", "action", "scope"],
+  "convertedFrom": "pytorch:checkpoint-llm+int8-weights",
+  "confidenceThreshold": 0.80
+}
