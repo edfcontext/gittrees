@@ -138,14 +138,13 @@ struct FileChangeList: View {
                     if let action {
                         Button(action == .stage ? "Stage All" : "Unstage All") {
                             if action == .stage {
-                                // Drafted from the full set that will be staged — the
-                                // already-staged plus these — so the offer does not race
-                                // the async status refresh.
-                                let draft = CommitMessageDrafter.draft(
-                                    for: service.status.stagedChanges + changes
-                                )
                                 Task {
                                     await service.stage(changes)
+                                    let diff = (try? await service.stagedDiff()) ?? ""
+                                    let draft = await CommitDescriptionService.shared.suggestedMessage(
+                                        stagedChanges: service.status.stagedChanges,
+                                        stagedDiff: diff
+                                    )
                                     commands.suggestCommitMessage(draft)
                                 }
                             } else {

@@ -14,6 +14,9 @@ let package = Package(
         // Git execution, parsing, models and state. No SwiftUI.
         .target(
             name: "GitTreesCore",
+            resources: [
+                .copy("Resources/CommitIntentModel")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // SwiftUI application shell.
@@ -25,6 +28,9 @@ let package = Package(
         .testTarget(
             name: "GitTreesCoreTests",
             dependencies: ["GitTreesCore"],
+            resources: [
+                .copy("Fixtures")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

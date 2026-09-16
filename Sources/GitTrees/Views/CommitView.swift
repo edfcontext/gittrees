@@ -8,6 +8,10 @@ struct CommitView: View {
 
     @State private var message = ""
     @FocusState private var messageFocused: Bool
+    /// Last model/heuristic suggestion applied to the editor, so a later restage
+    /// can replace it without clobbering a message the user has started typing.
+    @State private var lastSuggestion = ""
+    @State private var suggestionCaption = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -66,18 +70,30 @@ struct CommitView: View {
                 Spacer(minLength: 0)
 
                 Button {
-                    message = CommitMessageDrafter.draft(for: service.status.stagedChanges)
+                    Task { await refreshSuggestion(force: true) }
                 } label: {
                     Image(systemName: "sparkles")
                 }
                 .buttonStyle(.borderless)
                 .disabled(stagedCount == 0)
-                .help("Draft a short subject from the staged changes. Replaces the current message.")
+                .help("Draft a short subject from the staged changes. Uses the local commit model when it is confident, otherwise the file-name heuristic. Replaces the current message.")
 
                 Button("Commit") { commit() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!canCommit)
                     .help("Commit the staged files (⌘↩). Hooks and Git configuration run as usual.")
+            }
+
+            if !suggestionCaption.isEmpty {
+                Text(suggestionCaption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if stagedCount == 0 && !service.status.unstagedChanges.isEmpty {
+                Text("Stage files to get a commit suggestion. Sparkles only runs on the index.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(10)
@@ -93,8 +109,13 @@ struct CommitView: View {
             // message the user has already started is never overwritten.
             if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 message = pending
+                lastSuggestion = pending
+                suggestionCaption = ""
             }
             commands.pendingCommitMessage = nil
+        }
+        .task(id: stagedSignature) {
+            await refreshSuggestion()
         }
     }
 
@@ -138,6 +159,11 @@ struct CommitView: View {
 
     private var stagedCount: Int { service.status.stagedChanges.count }
 
+    /// Identity of the staged set, so a restage re-runs the suggester.
+    private var stagedSignature: String {
+        service.status.stagedChanges.map(\.path).joined(separator: "\n")
+    }
+
     private var canCommit: Bool {
         stagedCount > 0
             && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -151,7 +177,37 @@ struct CommitView: View {
         Task {
             if await service.commit(message: text) {
                 message = ""
+                lastSuggestion = ""
+                suggestionCaption = ""
             }
         }
+    }
+
+    /// Prefills the editor from the local commit model when confidence is high
+    /// enough, otherwise from `CommitMessageDrafter`. `force` is the sparkles
+    /// button: it always replaces. Otherwise the editor is only filled when it is
+    /// empty or still showing the previous suggestion.
+    private func refreshSuggestion(force: Bool = false) async {
+        let changes = service.status.stagedChanges
+        if changes.isEmpty {
+            if message == lastSuggestion {
+                message = ""
+            }
+            lastSuggestion = ""
+            suggestionCaption = ""
+            return
+        }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard force || trimmed.isEmpty || message == lastSuggestion else { return }
+        suggestionCaption = "Running commit model…"
+        let diff = (try? await service.stagedDiff()) ?? ""
+        let suggestion = await CommitDescriptionService.shared.suggest(
+            stagedChanges: changes,
+            stagedDiff: diff
+        )
+        guard force || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || message == lastSuggestion else { return }
+        message = suggestion.message
+        lastSuggestion = suggestion.message
+        suggestionCaption = suggestion.diagnostic
     }
 }
