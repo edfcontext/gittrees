@@ -36,6 +36,8 @@ public struct CommitSuggestion: Sendable, Hashable, Equatable {
     public var source: Source
     /// True when the model ran but its aggregate confidence is below the UI gate.
     public var belowThreshold: Bool
+    /// One-line explanation of why this message was chosen, for the commit footer.
+    public var diagnostic: String
 
     public init(
         message: String,
@@ -43,7 +45,8 @@ public struct CommitSuggestion: Sendable, Hashable, Equatable {
         confidence: Double,
         confidencePerHead: [String: Double] = [:],
         source: Source,
-        belowThreshold: Bool
+        belowThreshold: Bool,
+        diagnostic: String = ""
     ) {
         self.message = message
         self.intent = intent
@@ -51,6 +54,7 @@ public struct CommitSuggestion: Sendable, Hashable, Equatable {
         self.confidencePerHead = confidencePerHead
         self.source = source
         self.belowThreshold = belowThreshold
+        self.diagnostic = diagnostic
     }
 }
 
@@ -72,17 +76,32 @@ public struct LabelSchema: Sendable, Hashable {
         heads: [
             "type": ["FEATURE", "FIX", "REFACTOR", "UI", "TEST", "DOCS", "CONFIG", "DEPENDENCY", "PERFORMANCE", "CLEANUP"],
             "action": ["ADD", "FIX", "UPDATE", "REMOVE", "REFACTOR", "IMPROVE", "SUPPORT", "HANDLE", "PREVENT", "RENAME", "SIMPLIFY"],
-            "scope": ["WORKTREE", "BRANCH", "REPOSITORY", "COMMIT", "STATUS", "SETTINGS", "FILESYSTEM", "UI", "GIT", "TESTS", "GENERAL"]
+            "scope": ["UI", "API", "DOMAIN", "DATA", "INTEGRATION", "PLATFORM", "BUILD", "SETTINGS", "TESTS", "DOCS", "GENERAL"]
         ],
         headNames: ["type", "action", "scope"]
     )
 
     public static func load(from url: URL) throws -> LabelSchema {
         let data = try Data(contentsOf: url)
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let rawHeads = object?["heads"] as? [String: [String]] ?? [:]
-        let names = (object?["heads"] as? [String: Any]).map { Array($0.keys) }
-        return LabelSchema(heads: rawHeads, headNames: names)
+        let decoded = try JSONDecoder().decode(File.self, from: data)
+        let heads = [
+            "type": decoded.heads.type,
+            "action": decoded.heads.action,
+            "scope": decoded.heads.scope
+        ]
+        guard heads.values.allSatisfy({ !$0.isEmpty }) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return LabelSchema(heads: heads, headNames: ["type", "action", "scope"])
+    }
+
+    private struct File: Decodable {
+        var heads: Heads
+        struct Heads: Decodable {
+            var type: [String]
+            var action: [String]
+            var scope: [String]
+        }
     }
 }
 
@@ -91,13 +110,19 @@ public struct CommitIntentManifest: Sendable, Hashable {
     public var maxTokens: Int
     public var confidenceThreshold: Double
 
-    public static let bundled = CommitIntentManifest(maxTokens: 256, confidenceThreshold: 0.80)
+    public static let bundled = CommitIntentManifest(maxTokens: 256, confidenceThreshold: 0.50)
 
     public static func load(from url: URL) throws -> CommitIntentManifest {
         let data = try Data(contentsOf: url)
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let maxTokens = object?["maxTokens"] as? Int ?? 256
-        let threshold = object?["confidenceThreshold"] as? Double ?? 0.80
-        return CommitIntentManifest(maxTokens: maxTokens, confidenceThreshold: threshold)
+        let decoded = try JSONDecoder().decode(File.self, from: data)
+        return CommitIntentManifest(
+            maxTokens: decoded.maxTokens ?? 256,
+            confidenceThreshold: decoded.confidenceThreshold ?? 0.50
+        )
+    }
+
+    private struct File: Decodable {
+        var maxTokens: Int?
+        var confidenceThreshold: Double?
     }
 }

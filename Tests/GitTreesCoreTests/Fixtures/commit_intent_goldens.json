@@ -20,11 +20,11 @@
   "if_symbols": [],
   "truncated": "[FILES]\nM x.py\n[STATS]\nfiles=1 added=500 deleted=0\n[SYMBOLS]\n(none)\n[DIFF]\n+ line number 0 with words\n+ line number 1 with words\n+ line number 2 with words\n+ line number 3 with words\n+ line number 4 with words\n+ line number 5 with words\n+ line number 6 with words\n+ line number 7 with words\n... (diff truncated)",
   "renders": {
-    "fix_worktree": "Fix worktree handling",
-    "add_branch": "Add branch support",
+    "fix_worktree": "Fix logic handling",
+    "add_branch": "Add API support",
     "update_settings": "Update settings handling",
     "handle_object": "Handle worktree deletion",
-    "conventional": "fix(worktree): handle worktree deletion",
+    "conventional": "fix(logic): handle worktree deletion",
     "general_no_object": "Update changes",
     "add_general": "Add changes"
   }

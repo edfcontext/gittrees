@@ -76,17 +76,17 @@ fixtures = {
     "if_symbols": extract_symbols("+ if (x) {"),
     "truncated": normalize_diff(BIG, max_words=60),
     "renders": {
-        "fix_worktree": render({"type": "FIX", "action": "FIX", "scope": "WORKTREE"}),
-        "add_branch": render({"type": "FEATURE", "action": "ADD", "scope": "BRANCH"}),
+        "fix_worktree": render({"type": "FIX", "action": "FIX", "scope": "DOMAIN"}),
+        "add_branch": render({"type": "FEATURE", "action": "ADD", "scope": "API"}),
         "update_settings": render(
             {"type": "CONFIG", "action": "UPDATE", "scope": "SETTINGS"}
         ),
         "handle_object": render(
-            {"type": "FIX", "action": "HANDLE", "scope": "WORKTREE"},
+            {"type": "FIX", "action": "HANDLE", "scope": "DOMAIN"},
             "worktree deletion",
         ),
         "conventional": render(
-            {"type": "FIX", "action": "HANDLE", "scope": "WORKTREE"},
+            {"type": "FIX", "action": "HANDLE", "scope": "DOMAIN"},
             "worktree deletion",
             RenderStyle.CONVENTIONAL,
         ),

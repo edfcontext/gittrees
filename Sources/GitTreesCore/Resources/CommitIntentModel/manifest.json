@@ -5,7 +5,11 @@
   "modelType": "multi-head-classifier",
   "maxTokens": 256,
   "encoder": "sentence-transformers/all-MiniLM-L6-v2",
-  "outputs": ["type", "action", "scope"],
-  "convertedFrom": "pytorch:checkpoint-llm+int8-weights",
-  "confidenceThreshold": 0.80
+  "outputs": [
+    "type",
+    "action",
+    "scope"
+  ],
+  "convertedFrom": "pytorch:/Users/user/Dev/AI-Projects/gittrees-model/model/checkpoint-teacher-aw+int8-weights",
+  "confidenceThreshold": 0.5
 }

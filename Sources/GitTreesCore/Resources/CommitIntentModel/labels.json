@@ -1,9 +1,22 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "heads": {
     "type": ["FEATURE","FIX","REFACTOR","UI","TEST","DOCS","CONFIG","DEPENDENCY","PERFORMANCE","CLEANUP"],
     "action": ["ADD","FIX","UPDATE","REMOVE","REFACTOR","IMPROVE","SUPPORT","HANDLE","PREVENT","RENAME","SIMPLIFY"],
-    "scope": ["WORKTREE","BRANCH","REPOSITORY","COMMIT","STATUS","SETTINGS","FILESYSTEM","UI","GIT","TESTS","GENERAL"]
+    "scope": ["UI","API","DOMAIN","DATA","INTEGRATION","PLATFORM","BUILD","SETTINGS","TESTS","DOCS","GENERAL"]
   },
-  "phase0_head": "type"
+  "phase0_head": "type",
+  "scope_guide": {
+    "UI": "frontend, views, JSP, CSS, SwiftUI, React screens",
+    "API": "HTTP/RPC/BAPI, controllers, public clients",
+    "DOMAIN": "business rules, services, workflows (orders, picking, worktrees)",
+    "DATA": "persistence, SQL, DAO, schema, models",
+    "INTEGRATION": "external systems (SAP, ACS, Autostore, cloud, LLM, messaging)",
+    "PLATFORM": "VCS/git, filesystem, OS, runtime plumbing",
+    "BUILD": "CI, maven, docker, gradle, GitHub workflows",
+    "SETTINGS": "app config, properties, preferences",
+    "TESTS": "unit/integration tests and fixtures",
+    "DOCS": "markdown, comments-only, READMEs",
+    "GENERAL": "cross-cutting or none of the above — use sparingly"
+  }
 }

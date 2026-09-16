@@ -132,11 +132,11 @@ struct CommitMessageRendererTests {
     func matchesPython() throws {
         let goldens = try goldens
         #expect(
-            CommitMessageRenderer.render(CommitIntent(type: "FIX", action: "FIX", scope: "WORKTREE"))
+            CommitMessageRenderer.render(CommitIntent(type: "FIX", action: "FIX", scope: "DOMAIN"))
                 == goldens.renders.fixWorktree
         )
         #expect(
-            CommitMessageRenderer.render(CommitIntent(type: "FEATURE", action: "ADD", scope: "BRANCH"))
+            CommitMessageRenderer.render(CommitIntent(type: "FEATURE", action: "ADD", scope: "API"))
                 == goldens.renders.addBranch
         )
         #expect(
@@ -145,13 +145,13 @@ struct CommitMessageRendererTests {
         )
         #expect(
             CommitMessageRenderer.render(
-                CommitIntent(type: "FIX", action: "HANDLE", scope: "WORKTREE"),
+                CommitIntent(type: "FIX", action: "HANDLE", scope: "DOMAIN"),
                 object: "worktree deletion"
             ) == goldens.renders.handleObject
         )
         #expect(
             CommitMessageRenderer.render(
-                CommitIntent(type: "FIX", action: "HANDLE", scope: "WORKTREE"),
+                CommitIntent(type: "FIX", action: "HANDLE", scope: "DOMAIN"),
                 object: "worktree deletion",
                 style: .conventional
             ) == goldens.renders.conventional
@@ -169,6 +169,16 @@ struct CommitMessageRendererTests {
 
 @Suite("CommitDescriptionService")
 struct CommitDescriptionServiceTests {
+    @Test("labels.json loads the three heads in stable order")
+    func labelsLoadFromBundle() throws {
+        let url = try #require(CommitIntentResources.labels)
+        let schema = try LabelSchema.load(from: url)
+        #expect(schema.headNames == ["type", "action", "scope"])
+        #expect(schema.label(head: "type", at: 6) == "CONFIG")
+        #expect(schema.label(head: "action", at: 1) == "FIX")
+        #expect(schema.label(head: "scope", at: 0) == "UI")
+    }
+
     @Test("an empty staged diff falls back to the heuristic drafter")
     func heuristicFallback() async {
         let change = FileChange(
@@ -183,6 +193,7 @@ struct CommitDescriptionServiceTests {
         #expect(suggestion.source == .heuristic)
         #expect(suggestion.message == "Update App.swift")
         #expect(suggestion.belowThreshold)
+        #expect(suggestion.diagnostic.contains("no staged diff"))
     }
 }
 

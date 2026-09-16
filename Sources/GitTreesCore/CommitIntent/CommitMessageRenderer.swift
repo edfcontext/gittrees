@@ -17,10 +17,9 @@ public enum CommitMessageRenderer {
     ]
 
     private static let scopeNoun: [String: String] = [
-        "WORKTREE": "worktree", "BRANCH": "branch", "REPOSITORY": "repository",
-        "COMMIT": "commit", "STATUS": "status", "SETTINGS": "settings",
-        "FILESYSTEM": "filesystem", "UI": "UI", "GIT": "git", "TESTS": "tests",
-        "GENERAL": ""
+        "UI": "UI", "API": "API", "DOMAIN": "logic", "DATA": "data",
+        "INTEGRATION": "integration", "PLATFORM": "platform", "BUILD": "build",
+        "SETTINGS": "settings", "TESTS": "tests", "DOCS": "docs", "GENERAL": ""
     ]
 
     private static let conventionalType: [String: String] = [

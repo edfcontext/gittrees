@@ -56,7 +56,8 @@ public final class CommitIntentPredictor: @unchecked Sendable {
             confidence: confidence,
             confidencePerHead: confs,
             source: .model,
-            belowThreshold: confidence < threshold
+            belowThreshold: confidence < threshold,
+            diagnostic: ""
         )
     }
 
@@ -122,24 +123,40 @@ public final class CommitIntentPredictor: @unchecked Sendable {
         return best
     }
 
-    public enum PredictorError: Error {
+    public enum PredictorError: LocalizedError {
         case missingOutput(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .missingOutput(let head): "missing \(head) logits"
+            }
+        }
     }
 }
 
 /// Bundle URLs for the converted Core ML package and its sidecars.
 public enum CommitIntentResources {
     public static var directory: URL? {
-        if let url = Bundle.module.url(forResource: "CommitIntentModel", withExtension: nil) {
-            return url
-        }
-        if let url = Bundle.main.resourceURL?.appendingPathComponent("CommitIntentModel") {
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+        let candidates: [URL] = {
+            var urls: [URL] = []
+            if let exeDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+                urls.append(exeDir.appendingPathComponent("GitTrees_GitTreesCore.bundle").appendingPathComponent("CommitIntentModel"))
+                urls.append(exeDir.appendingPathComponent("CommitIntentModel"))
+            }
+            if let resources = Bundle.main.resourceURL {
+                urls.append(resources.appendingPathComponent("CommitIntentModel"))
+                urls.append(resources.appendingPathComponent("GitTrees_GitTreesCore.bundle").appendingPathComponent("CommitIntentModel"))
+            }
+            urls.append(Bundle.main.bundleURL.appendingPathComponent("GitTrees_GitTreesCore.bundle").appendingPathComponent("CommitIntentModel"))
+            return urls
+        }()
+        for url in candidates {
+            let tokenizer = url.appendingPathComponent("tokenizer.json")
+            if FileManager.default.fileExists(atPath: tokenizer.path) {
                 return url
             }
         }
-        return Bundle.main.url(forResource: "CommitIntentModel", withExtension: nil)
+        return Bundle.module.url(forResource: "CommitIntentModel", withExtension: nil)
     }
 
     public static var mlpackage: URL? {

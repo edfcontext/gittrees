@@ -169,7 +169,7 @@ def _copy_sidecar(checkpoint: Path, package: Path, out: Path, seq: int, source: 
         "encoder": "sentence-transformers/all-MiniLM-L6-v2",
         "outputs": ["type", "action", "scope"],
         "convertedFrom": source,
-        "confidenceThreshold": 0.80,
+        "confidenceThreshold": 0.50,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 

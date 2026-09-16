@@ -11,6 +11,7 @@ struct CommitView: View {
     /// Last model/heuristic suggestion applied to the editor, so a later restage
     /// can replace it without clobbering a message the user has started typing.
     @State private var lastSuggestion = ""
+    @State private var suggestionCaption = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -82,6 +83,18 @@ struct CommitView: View {
                     .disabled(!canCommit)
                     .help("Commit the staged files (⌘↩). Hooks and Git configuration run as usual.")
             }
+
+            if !suggestionCaption.isEmpty {
+                Text(suggestionCaption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if stagedCount == 0 && !service.status.unstagedChanges.isEmpty {
+                Text("Stage files to get a commit suggestion. Sparkles only runs on the index.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(10)
         .onChange(of: commands.commitFocusRequested) { _, requested in
@@ -97,6 +110,7 @@ struct CommitView: View {
             if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 message = pending
                 lastSuggestion = pending
+                suggestionCaption = ""
             }
             commands.pendingCommitMessage = nil
         }
@@ -164,6 +178,7 @@ struct CommitView: View {
             if await service.commit(message: text) {
                 message = ""
                 lastSuggestion = ""
+                suggestionCaption = ""
             }
         }
     }
@@ -179,17 +194,20 @@ struct CommitView: View {
                 message = ""
             }
             lastSuggestion = ""
+            suggestionCaption = ""
             return
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard force || trimmed.isEmpty || message == lastSuggestion else { return }
+        suggestionCaption = "Running commit model…"
         let diff = (try? await service.stagedDiff()) ?? ""
-        let suggestion = await CommitDescriptionService.shared.suggestedMessage(
+        let suggestion = await CommitDescriptionService.shared.suggest(
             stagedChanges: changes,
             stagedDiff: diff
         )
         guard force || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || message == lastSuggestion else { return }
-        message = suggestion
-        lastSuggestion = suggestion
+        message = suggestion.message
+        lastSuggestion = suggestion.message
+        suggestionCaption = suggestion.diagnostic
     }
 }
