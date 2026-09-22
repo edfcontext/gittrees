@@ -115,6 +115,8 @@ struct WorktreeHeaderBar: View {
     let onAddRemote: () -> Void
     let onCreatePullRequest: () -> Void
 
+    @State private var confirmingForcePush = false
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -243,10 +245,41 @@ struct WorktreeHeaderBar: View {
             .menuStyle(.button)
             .fixedSize()
             .help("Pull (merge) with ⇧⌘P. Diverged branches merge by default; the menu offers rebase or fast-forward-only.")
-            Button(service.selectedBranchNeedsUpstream ? "Push…" : "Push") {
+            Menu("Push") {
+                Button(service.selectedBranchNeedsUpstream ? "Push (Set Upstream)" : "Push") {
+                    Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
+                }
+                Divider()
+                Button("Force Push (With Lease)…") { confirmingForcePush = true }
+                    .help("Needed after an amend or rebase rewrote this branch. Uses --force-with-lease, so Git refuses if the remote moved since your last fetch.")
+            } primaryAction: {
                 Task { await service.push(setUpstream: service.selectedBranchNeedsUpstream) }
             }
+            .menuStyle(.button)
+            .fixedSize()
             .help(pushHelp)
+            .confirmationDialog(
+                "Force push \(worktree.branchName ?? "this branch")?",
+                isPresented: $confirmingForcePush,
+                titleVisibility: .visible
+            ) {
+                Button("Force Push", role: .destructive) {
+                    Task { await service.push(forceWithLease: true) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This overwrites the branch on the remote with your local history — needed after an amend or rebase. It uses --force-with-lease, so it is refused if the remote has moved since your last fetch.")
+            }
+
+            Menu("Merge") {
+                ForEach(service.mergeCandidates) { branch in
+                    Button("Merge \(branch.name)") { Task { await service.merge(branch) } }
+                }
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .disabled(!service.canMerge)
+            .help(mergeHelp)
 
             if service.hasGitHubRemote {
                 Button(pullRequestButtonTitle) { onCreatePullRequest() }
@@ -328,6 +361,17 @@ struct WorktreeHeaderBar: View {
         }
         let remote = service.remoteForPublishing ?? "<remote>"
         return "git push --set-upstream \(remote) \(worktree.branchName ?? "")"
+    }
+
+    private var mergeHelp: String {
+        if service.mergeOperation != .none {
+            return "Finish the merge in progress first — resolve the conflicts in Changes, or Abort Merge."
+        }
+        guard !service.mergeCandidates.isEmpty else {
+            return "No other branch to merge."
+        }
+        let into = worktree.branchName ?? "this branch"
+        return "Merge another branch into \(into). Conflicting files appear in Changes to resolve or abort."
     }
 
     private func openInPreferredEditor() {

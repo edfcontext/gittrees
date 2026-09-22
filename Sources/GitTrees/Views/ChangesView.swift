@@ -34,8 +34,43 @@ struct FileChangeList: View {
     /// unable to reduce the selection, so the two are kept in step explicitly instead.
     @State private var selection: Set<String> = []
     @State private var confirmingAbort = false
+    @State private var pendingDiscard: [FileChange] = []
 
     var body: some View {
+        VStack(spacing: 0) {
+            // A rebase stops between commits and `git commit` does not advance it, so the
+            // way out has to be on screen rather than buried in a context menu.
+            if service.mergeOperation == .rebase {
+                rebaseBanner
+                Divider()
+            }
+            list
+        }
+    }
+
+    private var rebaseBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Rebase in progress").font(.caption.weight(.semibold))
+                Text(service.canContinueRebase
+                     ? "Conflicts resolved — continue to replay the remaining commits."
+                     : "Resolve the conflicted files below, then continue.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("Continue") { Task { await service.continueRebase() } }
+                .disabled(!service.canContinueRebase)
+            Button("Skip Commit") { Task { await service.skipRebaseCommit() } }
+            Button("Abort…", role: .destructive) { confirmingAbort = true }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private var list: some View {
         List(selection: $selection) {
             if !service.status.conflicts.isEmpty {
                 section(
@@ -95,6 +130,30 @@ struct FileChangeList: View {
         } message: {
             Text("This discards the in-progress \(mergeNoun) and returns the worktree to the branch as it was. Your committed work is untouched.")
         }
+        .confirmationDialog(
+            discardTitle,
+            isPresented: Binding(
+                get: { !pendingDiscard.isEmpty },
+                set: { if !$0 { pendingDiscard = [] } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) {
+                let changes = pendingDiscard
+                pendingDiscard = []
+                Task { await service.discardChanges(changes) }
+            }
+            Button("Cancel", role: .cancel) { pendingDiscard = [] }
+        } message: {
+            Text("This returns the selected files to their committed state. Work that was never committed cannot be recovered.")
+        }
+    }
+
+    private var discardTitle: String {
+        guard pendingDiscard.count == 1 else {
+            return "Discard changes to \(pendingDiscard.count) files?"
+        }
+        return "Discard changes to \(pendingDiscard[0].fileName)?"
     }
 
     /// "Abort Merge" / "Abort Rebase", to match what is actually in progress.
@@ -195,6 +254,19 @@ struct FileChangeList: View {
         if !toUnstage.isEmpty {
             Button(count(toUnstage, one: "Unstage File", many: { "Unstage \($0) Files" })) {
                 Task { await service.unstage(toUnstage) }
+            }
+        }
+
+        // Throwing work away is the one irreversible action here, so it confirms first.
+        // Conflicted rows are excluded — they have their own "Restore From Branch" above.
+        let discardable = rows.map(\.change).filter { !$0.isConflicted }
+        if !discardable.isEmpty {
+            Divider()
+            Button(
+                count(discardable, one: "Discard Changes…", many: { "Discard Changes to \($0) Files…" }),
+                role: .destructive
+            ) {
+                pendingDiscard = discardable
             }
         }
 

@@ -563,12 +563,14 @@ public final class RepositoryService {
             do {
                 async let statusResult = self.client.statusSummary(worktree: worktree.path)
                 async let logResult = self.client.log(worktree: worktree.path, limit: 200, revisions: logRevisions)
+                // Asked on every refresh, not only when conflicts exist. A rebase whose
+                // conflicts have just been resolved is still in progress — and that is
+                // exactly the moment the UI has to offer Continue, so inferring `.none`
+                // from "no conflicts" would hide the only way to finish it. Runs
+                // concurrently with the other two, so it costs no extra wall time.
+                async let operationResult = try? self.client.inProgressOperation(worktree: worktree.path)
                 let (loadedStatus, loadedHistory) = try await (statusResult, logResult)
-                // Only when there are conflicts is it worth asking which operation is in
-                // progress; otherwise it is always `.none` and the extra call is waste.
-                let operation: GitClient.InProgressOperation = loadedStatus.conflicts.isEmpty
-                    ? .none
-                    : ((try? await self.client.inProgressOperation(worktree: worktree.path)) ?? .none)
+                let operation = await operationResult ?? .none
                 guard !Task.isCancelled, self.selectedWorktreePath == worktree.id else { return }
                 self.status = loadedStatus
                 self.history = loadedHistory
@@ -1159,6 +1161,93 @@ public final class RepositoryService {
         }
     }
 
+    /// True while a rebase is stopped on a step whose conflicts are all resolved — the
+    /// only moment `Continue Rebase` means anything.
+    public var canContinueRebase: Bool {
+        mergeOperation == .rebase && status.conflicts.isEmpty
+    }
+
+    /// Finishes the rebase step whose conflicts have been resolved.
+    ///
+    /// A merge is completed by committing, so the Commit box already covers it. A rebase
+    /// is not: without this, a fully resolved rebase could only be thrown away.
+    public func continueRebase() async {
+        await advanceRebase(argument: "--continue", label: "Continuing rebase…") { [client] worktree in
+            try await client.continueRebase(worktree: worktree.path)
+        }
+    }
+
+    /// Drops the commit being replayed and moves the rebase on to the next one.
+    public func skipRebaseCommit() async {
+        await advanceRebase(argument: "--skip", label: "Skipping commit…") { [client] worktree in
+            try await client.skipRebaseCommit(worktree: worktree.path)
+        }
+    }
+
+    private func advanceRebase(
+        argument: String,
+        label: String,
+        _ body: @escaping @Sendable (Worktree) async throws -> String
+    ) async {
+        guard let worktree = selectedWorktree else { return }
+        let output = await withOperation(label: label, worktree: worktree) {
+            let operation = try await self.client.inProgressOperation(worktree: worktree.path)
+            guard operation == .rebase else {
+                throw GitError.unexpectedOutput(
+                    reason: "there is no rebase in progress",
+                    arguments: ["rebase", argument]
+                )
+            }
+            return try await body(worktree)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Continue the Rebase", error: error)
+        } thenReturning: { [weak self] (output: String) -> String in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+            return output
+        }
+        if let output {
+            lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// Throws away local changes to `changes`, returning each file to its committed state.
+    ///
+    /// Destructive and not recoverable through Git — a file that was never committed is
+    /// simply gone — so callers confirm first.
+    public func discardChanges(_ changes: [FileChange]) async {
+        guard let worktree = selectedWorktree else { return }
+        let paths = changes.map(\.path)
+        guard !paths.isEmpty else { return }
+        _ = await withOperation(label: "Discarding changes…", worktree: worktree) { [client] in
+            try await client.discardChanges(worktree: worktree.path, paths: paths)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Discard Changes", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+        }
+    }
+
+    /// True when there is a commit to undo. Before the first commit there is not.
+    public var canUndoLastCommit: Bool {
+        selectedWorktree != nil && mergeOperation == .none && !history.isEmpty
+    }
+
+    /// Undoes the last commit, keeping everything it contained staged so it can be
+    /// corrected and committed again. Nothing is lost.
+    public func undoLastCommit() async {
+        guard let worktree = selectedWorktree else { return }
+        _ = await withOperation(label: "Undoing last commit…", worktree: worktree) { [client] in
+            try await client.undoLastCommit(worktree: worktree.path)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Undo the Last Commit", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+        }
+    }
+
     // MARK: - Ignore rules
 
     /// The file a destination resolves to, for the sheet to show and write to.
@@ -1331,15 +1420,21 @@ public final class RepositoryService {
 
     /// Commits the index. Hooks and commit configuration are left untouched.
     @discardableResult
-    public func commit(message: String) async -> Bool {
+    /// `amend` rewrites the previous commit instead of adding one — for a wrong message or
+    /// a file left out. It rewrites history, so an already-pushed branch then needs a
+    /// force-push (`push(forceWithLease:)`).
+    public func commit(message: String, amend: Bool = false) async -> Bool {
         guard let worktree = selectedWorktree else { return false }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        let output = await withOperation(label: "Committing…", worktree: worktree) { [client] in
-            try await client.commit(worktree: worktree.path, message: trimmed)
+        let output = await withOperation(
+            label: amend ? "Amending…" : "Committing…",
+            worktree: worktree
+        ) { [client] in
+            try await client.commit(worktree: worktree.path, message: trimmed, amend: amend)
         } onFailure: { error in
-            PresentableError(title: "Commit Failed", error: error)
+            PresentableError(title: amend ? "Amend Failed" : "Commit Failed", error: error)
         } thenReturning: { [weak self] output -> String in
             await self?.reload()
             self?.refreshSelectedWorktree()
@@ -1428,6 +1523,43 @@ public final class RepositoryService {
                 remote: plan.remote,
                 branch: plan.branch,
                 strategy: strategy
+            )
+        }
+    }
+
+    // MARK: - Merge
+
+    /// Branches that can be merged into the selected worktree's branch: every local and
+    /// remote branch except the one already checked out here.
+    ///
+    /// A branch checked out in *another* worktree is still offered — Git only refuses to
+    /// check such a branch out, not to merge from it.
+    public var mergeCandidates: [Branch] {
+        let current = selectedWorktree.flatMap { branch(for: $0)?.refName }
+        return (localBranches + remoteBranches).filter { $0.refName != current }
+    }
+
+    /// False while a merge or rebase is already in flight — that has to be resolved or
+    /// aborted before another merge can start — or when there is nothing to merge.
+    public var canMerge: Bool {
+        selectedWorktree != nil && mergeOperation == .none && !mergeCandidates.isEmpty
+    }
+
+    /// Merges `branch` into the selected worktree's branch.
+    ///
+    /// A conflicting merge is reported as a failure *and* still refreshes, so the
+    /// conflicted files land in the Changes list, where Use Mine / Use Theirs / Discard
+    /// resolve them individually and Abort Merge puts the branch back as it was.
+    public func merge(_ branch: Branch, noFastForward: Bool = false) async {
+        guard mergeOperation == .none else { return }
+        await runRemoteOperation(
+            label: "Merging \(branch.name)…",
+            title: "Could Not Merge \(branch.name)"
+        ) { [client] worktree in
+            try await client.merge(
+                worktree: worktree.path,
+                ref: branch.refName,
+                noFastForward: noFastForward
             )
         }
     }
@@ -1670,7 +1802,10 @@ public final class RepositoryService {
     }
 
     /// Pushes, publishing the branch when it has no upstream yet.
-    public func push(setUpstream: Bool = false) async {
+    /// `forceWithLease` is what makes a branch pushable again after an amend or a rebase
+    /// rewrote it. It is `--force-with-lease`, never a bare force: Git refuses if the
+    /// remote has moved since the last fetch, so someone else's commits cannot be erased.
+    public func push(setUpstream: Bool = false, forceWithLease: Bool = false) async {
         // Publishing needs a named remote; an ordinary push can fall back to Git's own
         // tracking configuration.
         let remote = setUpstream ? remoteForPublishing : selectedRemote
@@ -1682,8 +1817,16 @@ public final class RepositoryService {
             )
             return
         }
-        await runRemoteOperation(label: "Pushing…", title: "Push Failed") { [client] worktree in
-            try await client.push(worktree: worktree.path, remote: remote, setUpstream: setUpstream)
+        await runRemoteOperation(
+            label: forceWithLease ? "Force-pushing…" : "Pushing…",
+            title: "Push Failed"
+        ) { [client] worktree in
+            try await client.push(
+                worktree: worktree.path,
+                remote: remote,
+                setUpstream: setUpstream,
+                forceWithLease: forceWithLease
+            )
         }
     }
 
