@@ -12,6 +12,7 @@ struct CommitView: View {
     /// can replace it without clobbering a message the user has started typing.
     @State private var lastSuggestion = ""
     @State private var suggestionCaption = ""
+    @State private var amend = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -78,10 +79,37 @@ struct CommitView: View {
                 .disabled(stagedCount == 0)
                 .help("Draft a short subject from the staged changes. Uses the local commit model when it is confident, otherwise the file-name heuristic. Replaces the current message.")
 
-                Button("Commit") { commit() }
+                Toggle("Amend", isOn: $amend)
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .disabled(!service.canUndoLastCommit)
+                    .help("Rewrite the previous commit instead of adding one — for a wrong message or a file left out. This rewrites history, so a branch already pushed then needs Push ▸ Force Push (with lease).")
+                    .onChange(of: amend) { _, isOn in
+                        // Amending starts from the message being rewritten, unless the
+                        // user has already typed something of their own.
+                        guard isOn,
+                              message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                              let subject = service.history.first?.subject
+                        else { return }
+                        message = subject
+                    }
+
+                Menu {
+                    Button("Undo Last Commit") { Task { await service.undoLastCommit() } }
+                        .disabled(!service.canUndoLastCommit)
+                        .help("Removes the last commit but keeps everything it contained staged, ready to correct and commit again. Nothing is lost.")
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Button(amend ? "Amend" : "Commit") { commit() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!canCommit)
-                    .help("Commit the staged files (⌘↩). Hooks and Git configuration run as usual.")
+                    .help(amend
+                          ? "Rewrite the previous commit with this message and the staged files (⌘↩)."
+                          : "Commit the staged files (⌘↩). Hooks and Git configuration run as usual.")
             }
 
             if !suggestionCaption.isEmpty {
@@ -165,7 +193,8 @@ struct CommitView: View {
     }
 
     private var canCommit: Bool {
-        stagedCount > 0
+        // Amending needs no staged files — correcting just the message is the common case.
+        (stagedCount > 0 || amend)
             && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && service.status.conflicts.isEmpty
             && service.identity.isComplete
@@ -174,11 +203,13 @@ struct CommitView: View {
 
     private func commit() {
         let text = message
+        let isAmend = amend
         Task {
-            if await service.commit(message: text) {
+            if await service.commit(message: text, amend: isAmend) {
                 message = ""
                 lastSuggestion = ""
                 suggestionCaption = ""
+                amend = false
             }
         }
     }

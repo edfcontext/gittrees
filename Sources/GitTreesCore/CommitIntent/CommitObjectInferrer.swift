@@ -13,28 +13,32 @@ public enum CommitObjectInferrer {
         "simplify", "load", "save", "with", "for", "func", "is"
     ]
 
+    /// Weighted rather than by raw frequency: words from the diff's changed
+    /// symbols outrank words from file names, and an earlier changed symbol
+    /// outranks a later one — so the object leans toward the primary changed
+    /// identifier instead of whatever word merely repeats most.
     public static func infer(diff: String, files: [String]) -> String {
-        var words: [String] = []
-        for symbol in SymbolExtractor.extract(from: diff, limit: 6) {
-            words.append(contentsOf: split(symbol))
-        }
-        for file in files.prefix(3) {
-            words.append(contentsOf: split(stem(file)))
-        }
-        var freq: [String: Int] = [:]
+        var weight: [String: Int] = [:]
         var order: [String] = []
-        for word in words {
+        func add(_ word: String, _ w: Int) {
             let lower = word.lowercased()
-            guard lower.count > 2, !stop.contains(lower) else { continue }
-            if freq[lower] == nil {
+            guard lower.count > 2, !stop.contains(lower) else { return }
+            if weight[lower] == nil {
                 order.append(lower)
             }
-            freq[lower, default: 0] += 1
+            weight[lower, default: 0] += w
+        }
+        let symbols = SymbolExtractor.extract(from: diff, limit: 6)
+        for (i, symbol) in symbols.enumerated() {
+            for word in split(symbol) { add(word, symbols.count - i) } // earlier -> higher
+        }
+        for file in files.prefix(3) {
+            for word in split(stem(file)) { add(word, 1) }             // weak fallback
         }
         let top = order.sorted { a, b in
-            let fa = freq[a] ?? 0
-            let fb = freq[b] ?? 0
-            if fa != fb { return fa > fb }
+            let wa = weight[a] ?? 0
+            let wb = weight[b] ?? 0
+            if wa != wb { return wa > wb }
             return (order.firstIndex(of: a) ?? 0) < (order.firstIndex(of: b) ?? 0)
         }.prefix(2)
         return top.joined(separator: " ")

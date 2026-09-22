@@ -380,6 +380,35 @@ public final class GitClient: Sendable {
         }
     }
 
+    /// `git rebase --continue` — finishes the step whose conflicts have just been resolved.
+    ///
+    /// Only a rebase needs this. A merge is completed by committing, which the Commit box
+    /// already does, but `git commit` does not advance a rebase: without `--continue` a
+    /// fully resolved rebase could only be abandoned.
+    ///
+    /// `GIT_EDITOR=true` keeps Git from opening an editor for the commit message and
+    /// blocking forever on a UI that has no terminal attached.
+    @discardableResult
+    public func continueRebase(worktree: URL) async throws -> String {
+        let result = try await run(
+            ["rebase", "--continue"],
+            in: worktree,
+            environmentOverrides: ["GIT_EDITOR": "true"]
+        )
+        return result.stdoutText + result.stderrText
+    }
+
+    /// `git rebase --skip` — drops the commit being replayed and moves to the next one.
+    @discardableResult
+    public func skipRebaseCommit(worktree: URL) async throws -> String {
+        let result = try await run(
+            ["rebase", "--skip"],
+            in: worktree,
+            environmentOverrides: ["GIT_EDITOR": "true"]
+        )
+        return result.stdoutText + result.stderrText
+    }
+
     // MARK: - Ignore rules
 
     /// The parts of an ignore preview that do not depend on the candidate rule.
@@ -637,9 +666,67 @@ public final class GitClient: Sendable {
     /// The message is passed as an argument rather than through an editor, and no
     /// `--no-verify` is used, so `pre-commit`, `commit-msg` and `post-commit` hooks and
     /// all commit-related configuration behave exactly as they would on the command line.
-    public func commit(worktree: URL, message: String) async throws -> String {
-        let result = try await run(["commit", "--message", message], in: worktree)
+    public func commit(worktree: URL, message: String, amend: Bool = false) async throws -> String {
+        var arguments = ["commit", "--message", message]
+        if amend { arguments.append("--amend") }
+        let result = try await run(arguments, in: worktree)
         return result.stdoutText + result.stderrText
+    }
+
+    /// `git reset --soft HEAD~1` — undoes the last commit but keeps everything it
+    /// contained staged, so it can be corrected and committed again. Nothing is lost.
+    public func undoLastCommit(worktree: URL) async throws {
+        _ = try await run(["reset", "--soft", "HEAD~1"], in: worktree)
+    }
+
+    /// Throws away local changes to `paths`, returning each to its committed state.
+    ///
+    /// A path that exists in `HEAD` is restored from there in *both* the index and the
+    /// working tree. A path that does not — a newly added or an untracked file — has no
+    /// committed state to go back to, so discarding it means removing it: from the index
+    /// when it was staged, and from disk either way.
+    public func discardChanges(worktree: URL, paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        let committed = try await pathsInHead(worktree: worktree, paths: paths)
+
+        let tracked = paths.filter { committed.contains($0) }
+        if !tracked.isEmpty {
+            _ = try await run(
+                ["restore", "--source=HEAD", "--staged", "--worktree", "--"] + tracked,
+                in: worktree
+            )
+        }
+
+        for path in paths where !committed.contains(path) {
+            // `git rm --force` clears it from the index and deletes it. That fails for a
+            // path that was never staged (it is not in the index), so fall back to
+            // deleting the file itself.
+            let removed = try await run(
+                ["rm", "--force", "--quiet", "--", path],
+                in: worktree,
+                acceptableExitCodes: [0, 1, 128]
+            )
+            if removed.exitCode != 0 {
+                try? FileManager.default.removeItem(at: worktree.appendingPathComponent(path))
+            }
+        }
+    }
+
+    /// Which of `paths` exist in `HEAD`. Empty before the first commit, when `HEAD` does
+    /// not resolve and nothing can have a committed state yet.
+    private func pathsInHead(worktree: URL, paths: [String]) async throws -> Set<String> {
+        let result = try await run(
+            ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--"] + paths,
+            in: worktree,
+            acceptableExitCodes: [0, 128]
+        )
+        guard result.exitCode == 0 else { return [] }
+        return Set(
+            result.stdoutText
+                .split(separator: "\0")
+                .map(String.init)
+                .filter { !$0.isEmpty }
+        )
     }
 
     // MARK: - Remotes
@@ -692,6 +779,25 @@ public final class GitClient: Sendable {
         return result.stdoutText + result.stderrText
     }
 
+    /// `git merge <ref>` into the branch checked out in `worktree`.
+    ///
+    /// `ref` is fully qualified (`refs/heads/x`, `refs/remotes/origin/x`) so a local and a
+    /// remote branch of the same short name can never be confused.
+    ///
+    /// A merge that conflicts exits non-zero and therefore throws, carrying Git's own
+    /// "Automatic merge failed; fix conflicts" text. That is deliberate: the caller
+    /// refreshes either way, which is what puts the conflicted files in front of the user
+    /// to resolve or abort. Letting it throw also means a genuine failure — an unknown ref,
+    /// or local changes that would be overwritten — is still reported rather than silently
+    /// mistaken for a conflict.
+    public func merge(worktree: URL, ref: String, noFastForward: Bool = false) async throws -> String {
+        var arguments = ["merge"]
+        if noFastForward { arguments.append("--no-ff") }
+        arguments.append(ref)
+        let result = try await run(arguments, in: worktree)
+        return result.stdoutText + result.stderrText
+    }
+
     /// `git branch --set-upstream-to=<ref>` for the branch checked out in `worktree`, so
     /// later bare pulls and pushes track it.
     public func setUpstream(worktree: URL, to ref: String) async throws {
@@ -702,8 +808,17 @@ public final class GitClient: Sendable {
     ///
     /// `setUpstream` adds `--set-upstream <remote> <branch>` for a branch that has never
     /// been pushed, which requires knowing which remote to publish to.
-    public func push(worktree: URL, remote: String? = nil, setUpstream: Bool = false) async throws -> String {
+    /// `forceWithLease` sends `--force-with-lease`, which is required after an amend or a
+    /// rebase has rewritten history. Never plain `--force`: the lease makes Git refuse if
+    /// the remote moved since the last fetch, so a colleague's commits cannot be erased.
+    public func push(
+        worktree: URL,
+        remote: String? = nil,
+        setUpstream: Bool = false,
+        forceWithLease: Bool = false
+    ) async throws -> String {
         var arguments = ["push"]
+        if forceWithLease { arguments.append("--force-with-lease") }
         if setUpstream {
             guard let remote, !remote.isEmpty else {
                 throw GitError.unexpectedOutput(
