@@ -170,7 +170,7 @@ struct RepositoryWindow: View {
             .environment(session)
             .frame(minWidth: 860, minHeight: 520)
             .background(
-                WindowConfigurator(title: windowTitle) {
+                WindowConfigurator {
                     session.keyService = service
                     session.keyCommands = commands
                     service.refreshOnWindowActivation()
@@ -183,10 +183,6 @@ struct RepositoryWindow: View {
             .onAppear { session.registerWindow(service) }
             .focusedSceneValue(\.repositoryService, service)
             .focusedSceneValue(\.appCommands, commands)
-    }
-
-    private var windowTitle: String {
-        service.repository.map { "GitTrees — \($0.name)" } ?? "GitTrees"
     }
 }
 

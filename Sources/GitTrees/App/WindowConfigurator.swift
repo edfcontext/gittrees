@@ -2,8 +2,12 @@ import AppKit
 import SwiftUI
 
 /// Applies the window settings SwiftUI does not expose on macOS.
+///
+/// The window *title* is deliberately not one of them: it is owned by
+/// `.navigationTitle` in `MainView`, which shows the repository's name. Setting
+/// `window.title` here too made the two race — whichever ran last won — so the
+/// same window showed the bare name in one moment and a prefixed name the next.
 struct WindowConfigurator: NSViewRepresentable {
-    let title: String
     var onBecomeKey: () -> Void = {}
     var onAppActive: () -> Void = {}
     var onWillClose: () -> Void = {}
@@ -20,7 +24,6 @@ struct WindowConfigurator: NSViewRepresentable {
         view.onBecomeKey = onBecomeKey
         view.onAppActive = onAppActive
         view.onWillClose = onWillClose
-        view.window?.title = title
         view.window?.minSize = NSSize(width: 860, height: 520)
         // Session restore is ours: reopen the repositories that were open, not
         // however many empty windows AppKit last snapshot.
