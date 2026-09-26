@@ -10,6 +10,25 @@ repositories.
 It is intentionally narrower than SourceTree or GitKraken: open a repository, see its
 worktrees and branches, work in one of them, commit, and sync with a remote.
 
+## Commit suggestions
+
+On supported Macs running macOS 26 or later, commit suggestions use Apple
+Intelligence through the Foundation Models framework. Enable Apple Intelligence in
+System Settings and allow its on-device model to finish downloading. Build with
+the macOS 26 SDK or newer to include this provider; older SDKs retain the fallback.
+
+Suggestions are generated locally from the staged diff. Large diffs are abbreviated,
+and generated/lock-file contents are omitted from the evidence. Review the editable
+subject before committing. No diff is sent to a cloud service, and no API key is needed.
+If Apple Intelligence is unavailable or fails, GitTrees uses its bundled Core ML
+classifier, then a file-name summary if classifier confidence is too low. The footer
+identifies the provider or explains the fallback. macOS 14 remains supported.
+
+`swift test` covers provider selection and fallback behavior without requiring Apple
+Intelligence. To also compare live on-device suggestions against the bundled model
+on three synthetic diffs, run
+`GITTREES_TEST_APPLE_INTELLIGENCE=1 swift test --filter AppleIntelligenceCommitDrafterTests`.
+
 ## Git is the source of truth
 
 There is no Git implementation here, and no libgit2 or JGit. Every operation runs the

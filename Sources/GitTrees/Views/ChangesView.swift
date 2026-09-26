@@ -199,12 +199,8 @@ struct FileChangeList: View {
                             if action == .stage {
                                 Task {
                                     await service.stage(changes)
-                                    let diff = (try? await service.stagedDiff()) ?? ""
-                                    let draft = await CommitDescriptionService.shared.suggestedMessage(
-                                        stagedChanges: service.status.stagedChanges,
-                                        stagedDiff: diff
-                                    )
-                                    commands.suggestCommitMessage(draft)
+                                    // CommitView drafts after the refreshed staged status
+                                    // arrives, avoiding duplicate on-device generations.
                                 }
                             } else {
                                 Task { await service.unstage(changes) }

@@ -12,6 +12,7 @@ struct CommitView: View {
     /// can replace it without clobbering a message the user has started typing.
     @State private var lastSuggestion = ""
     @State private var suggestionCaption = ""
+    @State private var suggestionRequest = UUID()
     @State private var amend = false
 
     var body: some View {
@@ -77,7 +78,7 @@ struct CommitView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(stagedCount == 0)
-                .help("Draft a short subject from the staged changes. Uses the local commit model when it is confident, otherwise the file-name heuristic. Replaces the current message.")
+                .help("Draft a short subject with on-device Apple Intelligence, falling back to the local commit model or file names when unavailable. Replaces the current message.")
 
                 Toggle("Amend", isOn: $amend)
                     .toggleStyle(.checkbox)
@@ -145,6 +146,7 @@ struct CommitView: View {
         .task(id: stagedSignature) {
             await refreshSuggestion()
         }
+        .onDisappear { suggestionRequest = UUID() }
     }
 
     // MARK: - Behind-upstream notice
@@ -189,7 +191,9 @@ struct CommitView: View {
 
     /// Identity of the staged set, so a restage re-runs the suggester.
     private var stagedSignature: String {
-        service.status.stagedChanges.map(\.path).joined(separator: "\n")
+        ([service.selectedWorktreePath ?? ""] + service.status.stagedChanges.map {
+            "\($0.indexStatus.rawValue):\($0.path)"
+        }).joined(separator: "\n")
     }
 
     private var canCommit: Bool {
@@ -202,6 +206,7 @@ struct CommitView: View {
     }
 
     private func commit() {
+        suggestionRequest = UUID()
         let text = message
         let isAmend = amend
         Task {
@@ -214,11 +219,12 @@ struct CommitView: View {
         }
     }
 
-    /// Prefills the editor from the local commit model when confidence is high
-    /// enough, otherwise from `CommitMessageDrafter`. `force` is the sparkles
-    /// button: it always replaces. Otherwise the editor is only filled when it is
-    /// empty or still showing the previous suggestion.
+    /// Prefills from Apple Intelligence with local fallbacks. Sparkles replaces the
+    /// current message, but never edits made while generation is in flight.
     private func refreshSuggestion(force: Bool = false) async {
+        let request = UUID()
+        suggestionRequest = request
+        suggestionCaption = ""
         let changes = service.status.stagedChanges
         if changes.isEmpty {
             if message == lastSuggestion {
@@ -230,13 +236,27 @@ struct CommitView: View {
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard force || trimmed.isEmpty || message == lastSuggestion else { return }
-        suggestionCaption = "Running commit model…"
+        let originalMessage = message
+        let signature = stagedSignature
+        suggestionCaption = "Drafting commit suggestion…"
+        defer {
+            if suggestionRequest == request && suggestionCaption == "Drafting commit suggestion…" {
+                suggestionCaption = ""
+            }
+        }
         let diff = (try? await service.stagedDiff()) ?? ""
+        guard !Task.isCancelled, suggestionRequest == request, stagedSignature == signature else { return }
         let suggestion = await CommitDescriptionService.shared.suggest(
             stagedChanges: changes,
             stagedDiff: diff
         )
-        guard force || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || message == lastSuggestion else { return }
+        guard !Task.isCancelled, suggestionRequest == request,
+              stagedSignature == signature, message == originalMessage else { return }
+        // A file can be restaged with different contents while its status stays M.
+        let currentDiff = (try? await service.stagedDiff()) ?? ""
+        guard !Task.isCancelled, suggestionRequest == request,
+              stagedSignature == signature, currentDiff == diff,
+              message == originalMessage else { return }
         message = suggestion.message
         lastSuggestion = suggestion.message
         suggestionCaption = suggestion.diagnostic

@@ -1,12 +1,7 @@
 import Foundation
 import os
 
-/// App-facing commit suggestion. Tries the bundled Core ML classifier first; if it
-/// is missing, fails, or is below the confidence gate, falls back to
-/// `CommitMessageDrafter`.
-///
-/// `suggest(stagedChanges:stagedDiff:)` is the Swift equivalent of
-/// `CommitModel.predict(staged_diff)`.
+/// Prefers Apple Intelligence, then the bundled Core ML classifier, then file names.
 public final class CommitDescriptionService: @unchecked Sendable {
     public static let shared = CommitDescriptionService()
 
@@ -19,14 +14,51 @@ public final class CommitDescriptionService: @unchecked Sendable {
     private var loadAttempted = false
     private var loadError: String?
 
-    public init() {}
+    typealias AppleDraft = @Sendable ([FileChange], String) async throws -> String
+    private let appleDraft: AppleDraft
 
-    /// A subject to put in the commit box: the model when it is at least
-    /// `confidenceThreshold` confident, otherwise the heuristic drafter.
+    public init() {
+        appleDraft = AppleIntelligenceCommitDrafter.draft
+    }
+
+    init(appleDraft: @escaping AppleDraft) {
+        self.appleDraft = appleDraft
+    }
+
+    /// A local, editable subject. Availability and generation failures retain the
+    /// existing classifier/heuristic behavior on older or ineligible Macs.
     public func suggest(stagedChanges: [FileChange], stagedDiff: String) async -> CommitSuggestion {
-        await Task.detached(priority: .userInitiated) {
+        guard !stagedChanges.isEmpty, !stagedDiff.isEmpty else {
+            return suggestNow(stagedChanges: stagedChanges, stagedDiff: stagedDiff)
+        }
+        let reason: String
+        do {
+            try Task.checkCancellation()
+            let generated = try await appleDraft(stagedChanges, stagedDiff)
+            try Task.checkCancellation()
+            let subject = try AppleIntelligenceCommitDrafter.validatedSubject(generated)
+            return CommitSuggestion(
+                message: subject,
+                intent: CommitIntent(type: "", action: "", scope: ""),
+                confidence: 0, // Generative output has no classifier confidence or intent labels.
+                source: .appleIntelligence,
+                belowThreshold: false,
+                diagnostic: "Apple Intelligence · On-device"
+            )
+        } catch is CancellationError {
+            return annotated(heuristicSuggestion(for: []), "Suggestion cancelled.")
+        } catch AppleIntelligenceCommitDrafter.Failure.unavailable(let explanation) {
+            reason = "Apple Intelligence unavailable: \(explanation)."
+        } catch {
+            // Do not expose errors that might contain the prompt or repository content.
+            reason = "Apple Intelligence could not produce a usable subject."
+        }
+        guard !Task.isCancelled else { return heuristicSuggestion(for: []) }
+        var fallback = await Task.detached(priority: .userInitiated) {
             self.suggestNow(stagedChanges: stagedChanges, stagedDiff: stagedDiff)
         }.value
+        fallback.diagnostic = "\(reason) \(fallback.diagnostic)"
+        return fallback
     }
 
     /// Just the string the commit box should show.

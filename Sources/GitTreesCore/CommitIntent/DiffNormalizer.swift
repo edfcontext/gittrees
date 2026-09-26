@@ -72,6 +72,16 @@ public enum DiffNormalizer {
         return (header + kept).joined(separator: "\n")
     }
 
+    /// Generative summaries need surrounding code to interpret additions such as
+    /// guards correctly. Keep hunk context without changing the classifier's input.
+    static func generativeEvidence(_ diff: String) -> String {
+        splitFiles(diff).map { file, body in
+            let header = "\(file.kind) \(file.path)"
+            guard !file.isGenerated else { return header + "\n[generated contents omitted]" }
+            return ([header] + body).joined(separator: "\n")
+        }.joined(separator: "\n\n")
+    }
+
     private static func splitFiles(_ diff: String) -> [(FileChange, [String])] {
         var chunks: [(FileChange, [String])] = []
         var curLines: [String]?

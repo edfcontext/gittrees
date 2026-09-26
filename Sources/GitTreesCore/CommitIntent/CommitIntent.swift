@@ -25,12 +25,14 @@ public struct CommitIntent: Sendable, Hashable, Equatable {
 /// A rendered commit subject plus the structured intent that produced it.
 public struct CommitSuggestion: Sendable, Hashable, Equatable {
     public enum Source: String, Sendable, Hashable {
+        case appleIntelligence
         case model
         case heuristic
     }
 
     public var message: String
     public var intent: CommitIntent
+    /// Classifier confidence only; zero for generative and heuristic suggestions.
     public var confidence: Double
     public var confidencePerHead: [String: Double]
     public var source: Source
