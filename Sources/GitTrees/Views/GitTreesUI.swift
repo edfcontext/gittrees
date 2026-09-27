@@ -1,4 +1,5 @@
 import AppKit
+import GitTreesCore
 import SwiftUI
 
 /// Shared visual tokens.
@@ -48,6 +49,8 @@ struct SectionHeaderLabel: View {
 /// The filled/hollow dot that distinguishes a branch with a live worktree from one
 /// without, and a dirty worktree from a clean one.
 struct WorktreeIndicator: View {
+    @Environment(RepositoryService.self) private var service
+
     enum State {
         /// Checked out in a worktree with uncommitted changes.
         case dirty
@@ -61,7 +64,18 @@ struct WorktreeIndicator: View {
         case stale
     }
 
-    let state: State
+    let worktree: Worktree?
+
+    /// Both sidebar sections observe the same live worktree status.
+    private var state: State {
+        guard let worktree else { return .inactive }
+        if worktree.isPrunable || worktree.isMissingOnDisk { return .stale }
+        switch service.isDirty(worktree) {
+        case .some(true): return .dirty
+        case .some(false): return .clean
+        case nil: return .unknown
+        }
+    }
 
     var body: some View {
         Image(systemName: symbol)
@@ -69,6 +83,7 @@ struct WorktreeIndicator: View {
             .foregroundStyle(tint)
             .frame(width: 9)
             .accessibilityLabel(accessibilityLabel)
+            .help(accessibilityLabel)
     }
 
     private var symbol: String {

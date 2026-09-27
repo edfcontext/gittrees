@@ -116,6 +116,7 @@ struct WorktreeHeaderBar: View {
     let onCreatePullRequest: () -> Void
 
     @State private var confirmingForcePush = false
+    @State private var showingBranchIntegration = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -271,15 +272,15 @@ struct WorktreeHeaderBar: View {
                 Text("This overwrites the branch on the remote with your local history — needed after an amend or rebase. It uses --force-with-lease, so it is refused if the remote has moved since your last fetch.")
             }
 
-            Menu("Merge") {
-                ForEach(service.mergeCandidates) { branch in
-                    Button("Merge \(branch.name)") { Task { await service.merge(branch) } }
-                }
+            Button("Merge / Rebase…") {
+                showingBranchIntegration = true
             }
-            .menuStyle(.button)
             .fixedSize()
             .disabled(!service.canMerge)
             .help(mergeHelp)
+            .sheet(isPresented: $showingBranchIntegration) {
+                BranchIntegrationSheet(worktree: worktree)
+            }
 
             if service.hasGitHubRemote {
                 Button(pullRequestButtonTitle) { onCreatePullRequest() }
@@ -365,13 +366,15 @@ struct WorktreeHeaderBar: View {
 
     private var mergeHelp: String {
         if service.mergeOperation != .none {
-            return "Finish the merge in progress first — resolve the conflicts in Changes, or Abort Merge."
+            return "Finish or abort the current merge or rebase in Changes first."
+        }
+        guard let into = worktree.branchName else {
+            return "Check out a branch before merging or rebasing."
         }
         guard !service.mergeCandidates.isEmpty else {
             return "No other branch to merge."
         }
-        let into = worktree.branchName ?? "this branch"
-        return "Merge another branch into \(into). Conflicting files appear in Changes to resolve or abort."
+        return "Merge another branch into \(into), or rebase \(into) onto another branch. Review both branches before starting."
     }
 
     private func openInPreferredEditor() {

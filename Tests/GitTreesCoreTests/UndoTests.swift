@@ -27,9 +27,9 @@ struct UndoTests {
         try await fixture.branchChangingFile("feature", contents: "line1\nline2\nFEATURE-3\n")
         try await fixture.commitHere(contents: "line1\nline2\nMAIN-3\n")
         try await fixture.git(["checkout", "--quiet", "feature"], in: fixture.work)
-        // Exits non-zero on the conflict, which is the state under test.
-        _ = try? await fixture.git(["rebase", "main"], in: fixture.work)
         try await fixture.fullRefresh()
+        let main = try #require(fixture.branch(named: "main"))
+        await fixture.service.rebase(onto: main)
         try await fixture.waitUntil { !fixture.service.status.conflicts.isEmpty }
 
         #expect(fixture.service.mergeOperation == .rebase)

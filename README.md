@@ -85,6 +85,26 @@ behave exactly as they do on the command line.
   any worktree are protected, and remote branches are kept.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
+- **Merge / Rebase** — choose another local or remote-tracking branch and review the
+  direction before starting: *Merge source into current* or *Rebase current onto base*.
+  Rebase requires a clean worktree and explains that replayed commits get new IDs.
+  Conflicts appear in Changes with resolution and abort actions, plus Continue and
+  Skip Commit for a stopped rebase.
+- **Git Assist** — the Merge / Rebase dialog diagnoses equal, ahead, fast-forward,
+  diverged and unrelated histories. Fast-Forward rechecks the preview before running
+  `git merge --ff-only`; remote comparisons use locally known refs and offer Fetch &
+  Recheck. Optional Apple Intelligence explanations run on-device.
+  Select a conflicted file in Changes and choose **Suggest Resolution…** to review
+  an experimental on-device proposal using its ancestor and both index versions. The
+  model may decline a conflict, and proposals that simply copy one changed side are
+  rejected. Review is always required. **Apply & Stage**
+  replaces only conflict blocks, preserves surrounding edits, and rejects stale
+  file/index/HEAD state. It never commits or continues a rebase automatically.
+  This first version supports small UTF-8 files modified on both sides, with up to four
+  standard conflict blocks and 10 KB of combined input. Binary files, symlinks,
+  generated lockfiles, additions/deletions and larger conflicts require manual resolution.
+  AI suggestions require an eligible Mac, macOS 26+, and Apple Intelligence enabled;
+  Git diagnosis and fast-forward continue to work without it.
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced
   unified diff (working tree or index), and a commit editor. Rows multi-select with the
   ordinary ⌘-click and ⇧-click, and the context menu acts on everything selected — see

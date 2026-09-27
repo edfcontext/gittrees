@@ -804,6 +804,16 @@ public final class GitClient: Sendable {
         return result.stdoutText + result.stderrText
     }
 
+    /// Replays the current branch onto a fully qualified ref. Keep other branch refs
+    /// fixed even if rebase.updateRefs is configured, and require explicit stashing.
+    public func rebase(worktree: URL, onto ref: String) async throws -> String {
+        let result = try await run(
+            ["-c", "rebase.updateRefs=false", "rebase", "--no-autostash", ref],
+            in: worktree
+        )
+        return result.stdoutText + result.stderrText
+    }
+
     /// `git branch --set-upstream-to=<ref>` for the branch checked out in `worktree`, so
     /// later bare pulls and pushes track it.
     public func setUpstream(worktree: URL, to ref: String) async throws {
@@ -986,7 +996,7 @@ public final class GitClient: Sendable {
     // MARK: - Execution
 
     @discardableResult
-    private func run(
+    func run(
         _ arguments: [String],
         in directory: URL?,
         acceptableExitCodes: Set<Int32> = [0],

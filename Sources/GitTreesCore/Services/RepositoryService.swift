@@ -1114,6 +1114,49 @@ public final class RepositoryService {
 
     // MARK: - Conflict resolution
 
+    public func assessBranches(worktree: Worktree, otherRef: String) async throws -> BranchAssessment {
+        try await client.assessBranches(worktree: worktree.path, otherRef: otherRef)
+    }
+
+    public func fetchForAssist(worktree: Worktree, branch: Branch) async throws {
+        guard selectedWorktree?.id == worktree.id,
+              let remote = remotes.filter({ branch.name.hasPrefix($0.name + "/") })
+                .max(by: { $0.name.count < $1.name.count }) else {
+            throw GitAssistError.unsupported("The remote for this branch is unavailable. Refresh the repository and try again.")
+        }
+        guard claim(worktree) else { throw GitError.operationInProgress(path: worktree.id) }
+        defer { release(worktree) }
+        lastOperationOutput = try await client.fetch(worktree: worktree.path, remote: remote.name)
+        await reload()
+        refreshSelectedWorktree()
+    }
+
+    public func fastForward(_ assessment: BranchAssessment) async throws {
+        guard let worktree = selectedWorktree, worktree.path == assessment.worktree,
+              worktree.branchRef == assessment.currentRef else { throw GitAssistError.stale }
+        guard claim(worktree) else { throw GitError.operationInProgress(path: worktree.id) }
+        defer { release(worktree); refreshSelectedWorktree() }
+        lastOperationOutput = try await client.fastForward(assessment)
+        await reload()
+    }
+
+    public func suggestConflictResolution(worktree: Worktree, path: String) async throws -> ConflictProposal {
+        let snapshot = try await client.conflictSnapshot(worktree: worktree.path, path: path)
+        let suggestion = try await AppleIntelligenceGitAssistant.suggest(snapshot)
+        try Task.checkCancellation()
+        return try await client.conflictProposal(snapshot: snapshot, replacements: suggestion.replacements,
+                                                explanation: suggestion.explanation)
+    }
+
+    public func applyConflictProposal(_ proposal: ConflictProposal) async throws {
+        guard let worktree = selectedWorktree, worktree.path == proposal.snapshot.worktree else {
+            throw GitAssistError.stale
+        }
+        guard claim(worktree) else { throw GitError.operationInProgress(path: worktree.id) }
+        defer { release(worktree); refreshSelectedWorktree() }
+        try await client.applyConflictProposal(proposal)
+    }
+
     /// Which working copy to keep for a conflicted file, in the user's terms rather than
     /// Git's stage numbers.
     public enum ConflictChoice: Sendable {
@@ -1559,7 +1602,7 @@ public final class RepositoryService {
         }
     }
 
-    // MARK: - Merge
+    // MARK: - Merge and rebase
 
     /// Branches that can be merged into the selected worktree's branch: every local and
     /// remote branch except the one already checked out here.
@@ -1574,7 +1617,11 @@ public final class RepositoryService {
     /// False while a merge or rebase is already in flight — that has to be resolved or
     /// aborted before another merge can start — or when there is nothing to merge.
     public var canMerge: Bool {
-        selectedWorktree != nil && mergeOperation == .none && !mergeCandidates.isEmpty
+        selectedWorktree?.branchRef != nil && mergeOperation == .none && !mergeCandidates.isEmpty
+    }
+
+    public var canRebase: Bool {
+        canMerge && status.isClean
     }
 
     /// Merges `branch` into the selected worktree's branch.
@@ -1583,16 +1630,29 @@ public final class RepositoryService {
     /// conflicted files land in the Changes list, where Use Mine / Use Theirs / Discard
     /// resolve them individually and Abort Merge puts the branch back as it was.
     public func merge(_ branch: Branch, noFastForward: Bool = false) async {
-        guard mergeOperation == .none else { return }
+        guard canMerge, let current = selectedWorktree?.branchName else { return }
         await runRemoteOperation(
-            label: "Merging \(branch.name)…",
-            title: "Could Not Merge \(branch.name)"
+            label: "Merging \(branch.name) into \(current)…",
+            title: "Could Not Merge \(branch.name) into \(current)"
         ) { [client] worktree in
             try await client.merge(
                 worktree: worktree.path,
                 ref: branch.refName,
                 noFastForward: noFastForward
             )
+        }
+    }
+
+    /// Replays the selected worktree's branch onto `branch`, leaving the base ref alone.
+    /// Refresh on failure too, so a stopped rebase exposes Continue, Skip and Abort.
+    public func rebase(onto branch: Branch) async {
+        // Git checks the live worktree with --no-autostash; cached status may lag a commit.
+        guard canMerge, let current = selectedWorktree?.branchName else { return }
+        await runRemoteOperation(
+            label: "Rebasing \(current) onto \(branch.name)…",
+            title: "Could Not Rebase \(current) onto \(branch.name)"
+        ) { [client] worktree in
+            try await client.rebase(worktree: worktree.path, onto: branch.refName)
         }
     }
 

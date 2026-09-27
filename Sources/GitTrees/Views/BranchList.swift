@@ -77,7 +77,7 @@ struct BranchRow: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            WorktreeIndicator(state: worktree == nil ? .inactive : .clean)
+            WorktreeIndicator(worktree: worktree)
 
             Text(branch.name)
                 .font(.callout)

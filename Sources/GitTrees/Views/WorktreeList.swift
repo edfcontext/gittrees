@@ -37,7 +37,7 @@ struct WorktreeRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            WorktreeIndicator(state: indicatorState)
+            WorktreeIndicator(worktree: worktree)
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -82,15 +82,6 @@ struct WorktreeRow: View {
         }
         .padding(.vertical, 1)
         .help(worktree.path.path)
-    }
-
-    private var indicatorState: WorktreeIndicator.State {
-        if worktree.isPrunable || worktree.isMissingOnDisk { return .stale }
-        switch service.isDirty(worktree) {
-        case .some(true): return .dirty
-        case .some(false): return .clean
-        case nil: return .unknown
-        }
     }
 
     /// Git's own reason is shown rather than a generic message, because "gitdir file

@@ -12,6 +12,13 @@ struct DiffView: View {
     @State private var text: String = ""
     @State private var isLoading = false
     @State private var loadError: String?
+    @State private var conflictRequest: ConflictRequest?
+
+    private struct ConflictRequest: Identifiable {
+        let id = UUID()
+        let worktree: Worktree
+        let path: String
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +30,9 @@ struct DiffView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(GitTreesUI.editorBackground)
         .task(id: reloadKey) { await reload() }
+        .sheet(item: $conflictRequest) { request in
+            ConflictSuggestionSheet(worktree: request.worktree, path: request.path)
+        }
     }
 
     // MARK: - Header
@@ -46,6 +56,15 @@ struct DiffView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if file.isConflicted, let worktree = service.selectedWorktree {
+                    Button("Suggest Resolution…", systemImage: "sparkles") {
+                        conflictRequest = ConflictRequest(worktree: worktree, path: file.path)
+                    }
+                    .controlSize(.small)
+                    .disabled(service.isBusy(worktree))
+                    .help("Use on-device Apple Intelligence to propose a resolution for review.")
+                }
 
                 Picker("Side", selection: Binding(
                     get: { service.showingStagedDiff },
