@@ -79,7 +79,10 @@ behave exactly as they do on the command line.
 - **Branches** — local and (optionally) remote branches, upstream tracking with
   ahead/behind counts. A filled indicator means the branch has a live worktree; clicking
   it selects that worktree instead of attempting a checkout Git would refuse. A branch
-  with no worktree offers *Create Worktree* or *Checkout in Main Worktree*.
+  with no worktree offers *Create Worktree*, *Checkout in Main Worktree*, and
+  *Delete Branch…* in its right-click menu. Deletion checks for unmerged work unless
+  you explicitly choose *Delete even if not fully merged*. Branches checked out in
+  any worktree are protected, and remote branches are kept.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
 - **Changes** — staged/unstaged/conflicted file lists, whole-file staging, a monospaced

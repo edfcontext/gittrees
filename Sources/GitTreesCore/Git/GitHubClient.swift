@@ -68,10 +68,49 @@ public final class GitHubClient: Sendable {
         return (nil, nil)
     }
 
-    /// Whether a remote URL points at GitHub. Covers `git@github.com:owner/repo.git` and
-    /// `https://github.com/owner/repo`.
+    /// Whether a remote URL points at GitHub. Covers `git@github.com:owner/repo.git`,
+    /// `https://github.com/owner/repo`, `ssh://git@github.com/owner/repo` — and, crucially,
+    /// SSH host aliases like `git@github-work:owner/repo`, which resolve to github.com via
+    /// `~/.ssh/config` even though the URL never contains the string "github.com".
     public static func isGitHubRemoteURL(_ url: String) -> Bool {
-        url.range(of: "github.com", options: .caseInsensitive) != nil
+        isGitHubRemoteURL(url, sshConfig: .user)
+    }
+
+    /// The alias-resolving core, with the ssh config injected so tests can supply one.
+    static func isGitHubRemoteURL(_ url: String, sshConfig: SSHConfig) -> Bool {
+        guard let host = remoteHost(url) else { return false }
+        if host.caseInsensitiveCompare("github.com") == .orderedSame { return true }
+        // Otherwise the host may be an ssh alias; ask ssh config what it connects to.
+        if let resolved = sshConfig.hostName(for: host) {
+            return resolved.caseInsensitiveCompare("github.com") == .orderedSame
+        }
+        return false
+    }
+
+    /// The host component of a git remote URL, or nil for a local path with no host.
+    ///
+    /// Handles the three forms git accepts: `scheme://[user@]host[:port]/path`, the
+    /// scp-like `[user@]host:path`, and a bare local path (which has neither and is not a
+    /// remote host).
+    static func remoteHost(_ raw: String) -> String? {
+        let url = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return nil }
+
+        if let scheme = url.range(of: "://") {
+            var rest = Substring(url[scheme.upperBound...])
+            if let at = rest.firstIndex(of: "@") { rest = rest[rest.index(after: at)...] }
+            let host = rest.prefix { $0 != "/" && $0 != ":" }
+            return host.isEmpty ? nil : String(host)
+        }
+
+        // scp-like: the host is what precedes the first colon (a local path has none).
+        if let colon = url.firstIndex(of: ":") {
+            var head = Substring(url[..<colon])
+            if let at = head.firstIndex(of: "@") { head = head[head.index(after: at)...] }
+            return head.isEmpty ? nil : String(head)
+        }
+
+        return nil
     }
 
     // MARK: - Pull requests

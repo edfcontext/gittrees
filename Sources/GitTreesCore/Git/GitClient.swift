@@ -207,6 +207,12 @@ public final class GitClient: Sendable {
         _ = try await run(["checkout", branch], in: worktree)
     }
 
+    /// Deletes a local branch. Git checks merge status unless force was explicitly
+    /// requested, and always refuses branches checked out in any worktree.
+    public func deleteBranch(repository: URL, name: String, force: Bool = false) async throws {
+        _ = try await run(["branch", force ? "-D" : "-d", "--", name], in: repository)
+    }
+
     // MARK: - Identity
 
     /// Reads both the resolved and the repository-local commit identity.

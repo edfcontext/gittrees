@@ -12,6 +12,7 @@ struct RepositorySidebar: View {
     let onOpenRepository: () -> Void
     let onRequestRemoval: (Worktree) -> Void
     let onRequestLock: (Worktree) -> Void
+    @State private var branchToDelete: Branch?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,13 +25,22 @@ struct RepositorySidebar: View {
                     onRequestLock: onRequestLock
                 )
 
-                BranchList(selection: $selection, onCreateWorktree: onNewWorktree)
+                BranchList(selection: $selection, onCreateWorktree: onNewWorktree,
+                           onDeleteBranch: { branchToDelete = $0 })
             }
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 22)
 
             footer
         }
+        .sheet(item: $branchToDelete) { branch in
+            DeleteBranchSheet(branch: branch) {
+                if selection == .branch(branch.refName) {
+                    selection = service.selectedWorktreePath.map(SidebarItem.worktree)
+                }
+            }
+        }
+        .onChange(of: service.repository?.id) { _, _ in branchToDelete = nil }
     }
 
     // MARK: - Header

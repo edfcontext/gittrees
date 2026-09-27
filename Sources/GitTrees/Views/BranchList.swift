@@ -12,6 +12,7 @@ struct BranchList: View {
 
     @Binding var selection: SidebarItem?
     let onCreateWorktree: () -> Void
+    let onDeleteBranch: (Branch) -> Void
 
     var body: some View {
         Section {
@@ -55,6 +56,10 @@ struct BranchList: View {
             }
             .disabled(service.mainWorktree == nil)
         }
+        Divider()
+        Button("Delete Branch…", role: .destructive) { onDeleteBranch(branch) }
+            .disabled(service.activeOperation != nil || service.branchDeletionBlocker(branch) != nil)
+            .help(service.branchDeletionBlocker(branch) ?? "Delete this local branch.")
     }
 
     @ViewBuilder

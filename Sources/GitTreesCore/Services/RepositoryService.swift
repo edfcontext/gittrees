@@ -1032,6 +1032,38 @@ public final class RepositoryService {
 
     // MARK: - Branch actions
 
+    /// A reason to disable local branch deletion, also checked when confirming it.
+    public func branchDeletionBlocker(_ branch: Branch) -> String? {
+        guard branch.kind == .local else { return "Only local branches can be deleted here." }
+        if let path = worktree(for: branch)?.path ?? branch.worktreePath {
+            return "Checked out in \(path.path). Switch that worktree to another branch or remove the worktree first."
+        }
+        if branch.isCurrentHEAD { return "Switch to another branch before deleting this branch." }
+        return nil
+    }
+
+    @discardableResult
+    public func deleteBranch(_ branch: Branch, force: Bool = false) async -> Bool {
+        guard let repository, activeOperation == nil else { return false }
+        guard let current = branches.first(where: { $0.refName == branch.refName }),
+              current.objectName == branch.objectName else {
+            lastError = PresentableError(title: "Branch Has Changed", message: "Refresh the branch list and try again.")
+            return false
+        }
+        if let reason = branchDeletionBlocker(current) {
+            lastError = PresentableError(title: "Cannot Delete Branch", message: reason)
+            return false
+        }
+        return await withOperation(label: "Deleting \(branch.name)…") { [client] in
+            try await client.deleteBranch(repository: repository.commandDirectory, name: branch.name, force: force)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Delete Branch", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            return true
+        } ?? false
+    }
+
     /// Checks a branch out in an existing worktree.
     ///
     /// Git's own rule — a branch may be checked out in only one worktree — is left to
