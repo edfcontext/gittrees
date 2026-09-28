@@ -304,6 +304,19 @@ public final class RepositoryService {
         worktreeActivityDates[worktree.id]
     }
 
+    /// Most recent activity across the repository's live worktrees.
+    public var repositoryLastActivityDate: Date? {
+        worktreeActivityDates.values.max()
+    }
+
+    /// Linked worktrees that still exist on disk, excluding the repository's main
+    /// workspace and stale metadata that Git can prune.
+    public var linkedWorktreeCount: Int {
+        worktrees.count {
+            !$0.isMain && !$0.isBare && !$0.isPrunable && !$0.isMissingOnDisk
+        }
+    }
+
     public func isBusy(_ worktree: Worktree) -> Bool {
         busyWorktreePaths.contains(worktree.id)
     }
@@ -330,6 +343,8 @@ public final class RepositoryService {
             selectedWorktreePath = nil
             worktrees = []
             branches = []
+            dirtyStates = [:]
+            worktreeActivityDates = [:]
             // A different repository carries its own fetch cadence; don't let the previous
             // one's timestamp suppress the first auto-fetch here.
             lastAutoFetch = nil
@@ -342,6 +357,8 @@ public final class RepositoryService {
             repository = nil
             worktrees = []
             branches = []
+            dirtyStates = [:]
+            worktreeActivityDates = [:]
             // "Not a repository" is an offer to make one, not a failure to report.
             if case GitError.notARepository = error {
                 uninitializedDirectory = directory

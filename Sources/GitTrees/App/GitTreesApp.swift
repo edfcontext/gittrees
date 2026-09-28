@@ -60,6 +60,12 @@ final class AppSession {
         liveServices[id] = WeakRepositoryService(service)
     }
 
+    /// Repository services belonging to windows that are currently open. Consumers
+    /// filter out empty windows and may deduplicate repositories opened more than once.
+    var openRepositoryServices: [RepositoryService] {
+        liveServices.values.compactMap(\.service)
+    }
+
     /// Re-reads every open repository. Called when GitTrees becomes the active app
     /// again, so Changes pick up edits made in an IDE without requiring a click
     /// inside the window first.
@@ -235,6 +241,8 @@ final class AppCommands {
     var createPullRequestRequested = false
     var commitFocusRequested = false
     var newWindowRequested = false
+    /// Per-window visibility for the trailing Open Repositories inspector.
+    var isOpenRepositoriesPanelPresented = false
     var pendingRecent: RecentRepository?
     /// The path the Changes context menu asked to build an ignore rule for.
     var ignoreRequest: IgnoreRequest?
@@ -255,6 +263,9 @@ final class AppCommands {
     func createPullRequest() { createPullRequestRequested = true }
     func focusCommitMessage() { commitFocusRequested = true }
     func newWindow() { newWindowRequested = true }
+    func setOpenRepositoriesPanelPresented(_ isPresented: Bool) {
+        isOpenRepositoriesPanelPresented = isPresented
+    }
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
     func ignore(path: String) { ignoreRequest = IgnoreRequest(path: path) }
     func branchChanges() { branchChangesRequested = true }
@@ -318,6 +329,17 @@ private struct GitTreesCommands: Commands {
             Button("Refresh") { service?.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(service?.repository == nil)
+        }
+
+        CommandGroup(after: .sidebar) {
+            Toggle(
+                "Open Repositories Panel",
+                isOn: Binding(
+                    get: { commands?.isOpenRepositoriesPanelPresented ?? false },
+                    set: { commands?.setOpenRepositoriesPanelPresented($0) }
+                )
+            )
+            .disabled(commands == nil)
         }
 
         CommandMenu("Repository") {

@@ -30,7 +30,7 @@ while IFS= read -r bundle; do
     bundle_name="$(basename "$bundle")"
     cp -R "$bundle" "$RESOURCES_DIR/"
     ln -s "../Resources/$bundle_name" "$MACOS_DIR/$bundle_name"
-done < <(find "$BIN_DIR" -maxdepth 1 -name "*.bundle")
+done < <(find "$BIN_DIR" -maxdepth 1 -name "*.bundle" ! -name "*Tests.bundle")
 
 # Also copy the model directory into Contents/Resources as a Bundle.main fallback.
 CORE_MODEL="$ROOT_DIR/Sources/GitTreesCore/Resources/CommitIntentModel"

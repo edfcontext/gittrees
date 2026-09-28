@@ -262,6 +262,7 @@ struct MoveChangesTests {
         #expect(try await fixture.status(of: worktree.path).isClean)
         #expect(!(try await fixture.status(of: fixture.repository).isClean))
         #expect(try await fixture.stashCount() == 0)
+        #expect(fixture.service.linkedWorktreeCount == 1)
     }
 
     // MARK: - Stash panel

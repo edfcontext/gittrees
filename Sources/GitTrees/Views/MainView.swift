@@ -23,7 +23,12 @@ struct MainView: View {
     @State private var hasRestored = false
 
     var body: some View {
+        @Bindable var commands = commands
         relayedCommands
+            .inspector(isPresented: $commands.isOpenRepositoriesPanelPresented) {
+                OpenRepositoriesPanel()
+                    .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
+            }
     }
 
     // The window is assembled in layers rather than one chain: the split view, its

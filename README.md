@@ -55,6 +55,16 @@ the sheet to stop a scan. Run again after changing files.
 To validate the integration against an installed Semgrep (tested with 1.178.0), run
 `GITTREES_TEST_SEMGREP_PATH=/absolute/path/to/semgrep swift test --filter SecurityScannerTests`.
 
+CI runs the same checked-in rules as a blocking Semgrep 1.178.0 scan. Findings and
+scan/configuration failures fail the job; partial-parse warnings remain non-fatal
+because Semgrep's Swift support is experimental. Run it locally with
+`Scripts/run-semgrep.sh` (or set `SEMGREP_PATH` to an executable). The security workflow
+also validates the shipped third-party notices on every run and reviews pull request
+dependency changes against the license and vulnerability rules in
+[`OSS_POLICY.md`](OSS_POLICY.md). Neither scan runs as part of `Scripts/build-app.sh`;
+they are independent CI gates so a local distributable build does not install tools or
+contact external services.
+
 ## Git is the source of truth
 
 There is no Git implementation here, and no libgit2 or JGit. Every operation runs the
