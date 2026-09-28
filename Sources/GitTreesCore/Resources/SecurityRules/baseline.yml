@@ -1,0 +1,53 @@
+# First-party baseline rules maintained by GitTrees. No third-party rule pack is bundled.
+# Findings are review candidates, not proof of exploitability.
+rules:
+  - id: gittrees.swift-shell-command
+    languages: [swift]
+    severity: WARNING
+    message: A shell command can interpret metacharacters. Prefer Process with a fixed executable and separate arguments, and review any interpolated input.
+    pattern-either:
+      - pattern: $P.arguments = ["-c", ...]
+      - pattern: $P.arguments = ["-lc", ...]
+  - id: gittrees.swift-accept-server-trust
+    languages: [swift]
+    severity: WARNING
+    message: Review certificate validation before accepting serverTrust. Accepting an unvalidated server certificate can allow interception.
+    pattern: |
+      URLCredential(trust: $TRUST)
+  - id: gittrees.python-shell-execution
+    languages: [python]
+    severity: WARNING
+    message: shell=True interprets shell syntax. Prefer an argument array with shell=False, especially for untrusted input.
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: os.system(...)
+  - id: gittrees.python-unsafe-yaml
+    languages: [python]
+    severity: WARNING
+    message: Unsafe YAML loading can construct arbitrary objects. Use yaml.safe_load for untrusted documents.
+    pattern: yaml.unsafe_load(...)
+  - id: gittrees.javascript-eval
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: eval executes a string as code. Avoid evaluating untrusted input.
+    pattern: eval(...)
+  - id: gittrees.java-runtime-exec
+    languages: [java]
+    severity: WARNING
+    message: Review command construction and input validation. Prefer a fixed executable with separate ProcessBuilder arguments.
+    pattern: Runtime.getRuntime().exec(...)
+  - id: gittrees.private-key-material
+    languages: [generic]
+    severity: ERROR
+    message: Possible private key material. Check whether this is a real credential; remove and rotate exposed keys.
+    pattern-regex: '-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{16,}'
+  - id: gittrees.ats-arbitrary-loads
+    languages: [generic]
+    paths:
+      include: ["*.plist"]
+    severity: WARNING
+    message: App Transport Security permits arbitrary loads. Restrict exceptions to the specific hosts that require them.
+    pattern-regex: '<key>NSAllowsArbitraryLoads</key>\s*<true\s*/>'

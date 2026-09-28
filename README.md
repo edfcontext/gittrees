@@ -29,6 +29,32 @@ Intelligence. To also compare live on-device suggestions against the bundled mod
 on three synthetic diffs, run
 `GITTREES_TEST_APPLE_INTELLIGENCE=1 swift test --filter AppleIntelligenceCommitDrafterTests`.
 
+## Help, acknowledgements and security scanning
+
+Version **1.3 (build 4)** adds **Help → GitTrees Help** and **Help → Acknowledgements**.
+The latter includes notices and the Apache 2.0 license for the bundled MiniLM-derived
+model and tokenizer assets. There are no third-party Swift package dependencies.
+
+Select a worktree and choose **Repository → Security Scan…** to run Semgrep CE locally.
+Install the optional executable with `brew install semgrep` or `pipx install semgrep`,
+then set its path in **Settings → Security Scan**. Semgrep itself is not bundled.
+
+The eight first-party baseline rules cover selected risky Swift, Python,
+JavaScript/TypeScript and Java constructs, private-key markers and permissive App
+Transport Security settings. Swift analysis in Semgrep CE is experimental. These are
+review candidates, not proof of vulnerabilities. This small baseline is not a full
+security audit, dependency vulnerability scan or replacement for a maintained rule pack.
+
+Scans use the bundled configuration with metrics and version checks disabled, no
+registry download, no login and no autofix. They inspect the current local files,
+including uncommitted changes. Semgrep's ignore rules, build/dependency exclusions,
+1 MB file limit and per-rule timeouts limit coverage. Findings show file/line locations;
+errors, timeouts and empty scans are never reported as a clean result. Cancel or close
+the sheet to stop a scan. Run again after changing files.
+
+To validate the integration against an installed Semgrep (tested with 1.178.0), run
+`GITTREES_TEST_SEMGREP_PATH=/absolute/path/to/semgrep swift test --filter SecurityScannerTests`.
+
 ## Git is the source of truth
 
 There is no Git implementation here, and no libgit2 or JGit. Every operation runs the

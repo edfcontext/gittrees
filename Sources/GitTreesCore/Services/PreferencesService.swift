@@ -9,6 +9,7 @@ import Observation
 @Observable
 public final class PreferencesService {
     private enum Key {
+        static let semgrepExecutablePath = "semgrepExecutablePath"
         static let gitExecutablePath = "gitExecutablePath"
         static let gitHubExecutablePath = "gitHubExecutablePath"
         static let preferredEditor = "preferredEditor"
@@ -33,6 +34,8 @@ public final class PreferencesService {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.semgrepExecutablePath = defaults.string(forKey: Key.semgrepExecutablePath)
+            ?? SecurityScanner.defaultExecutablePath
         self.gitExecutablePath = defaults.string(forKey: Key.gitExecutablePath)
             ?? GitProcessRunner.defaultExecutablePath
         self.gitHubExecutablePath = defaults.string(forKey: Key.gitHubExecutablePath)
@@ -75,6 +78,10 @@ public final class PreferencesService {
     /// whose GitHub CLI lives elsewhere can point this at it.
     public var gitHubExecutablePath: String {
         didSet { defaults.set(gitHubExecutablePath, forKey: Key.gitHubExecutablePath) }
+    }
+
+    public var semgrepExecutablePath: String {
+        didSet { defaults.set(semgrepExecutablePath, forKey: Key.semgrepExecutablePath) }
     }
 
     public var preferredEditor: WorkspaceApplication {

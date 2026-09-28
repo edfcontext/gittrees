@@ -104,6 +104,8 @@ struct MainView: View {
                 IgnoreSheet(path: request.path)
             case .stash:
                 StashSheet()
+            case .securityScan(let worktree):
+                SecurityScanSheet(worktree: worktree)
             }
         }
         .alert(
@@ -181,6 +183,13 @@ struct MainView: View {
             commands.stashRequested = false
             if service.selectedWorktree != nil, !service.status.isClean {
                 activeSheet = .stash
+            }
+        }
+        .onChange(of: commands.securityScanRequested) { _, requested in
+            guard requested else { return }
+            commands.securityScanRequested = false
+            if let worktree = service.selectedWorktree, !worktree.isBare, !worktree.isMissingOnDisk {
+                activeSheet = .securityScan(worktree)
             }
         }
         .onChange(of: commands.newWindowRequested) { _, requested in
@@ -361,6 +370,7 @@ enum ActiveSheet: Identifiable {
     case createPullRequest
     case ignore(IgnoreRequest)
     case stash
+    case securityScan(Worktree)
 
     var id: String {
         switch self {
@@ -372,6 +382,7 @@ enum ActiveSheet: Identifiable {
         case .createPullRequest: "create-pull-request"
         case .ignore(let request): "ignore-\(request.id)"
         case .stash: "stash"
+        case .securityScan(let worktree): "security-scan-\(worktree.id)"
         }
     }
 }

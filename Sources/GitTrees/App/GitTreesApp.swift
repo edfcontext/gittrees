@@ -142,6 +142,16 @@ struct GitTreesApp: App {
                 .environment(launcher)
                 .environment(session)
         }
+
+        Window("GitTrees Help", id: "help") {
+            HelpView()
+        }
+        .defaultSize(width: 620, height: 640)
+
+        Window("Acknowledgements", id: "acknowledgements") {
+            AcknowledgementsView()
+        }
+        .defaultSize(width: 640, height: 620)
     }
 }
 
@@ -231,6 +241,7 @@ final class AppCommands {
     /// Open the New Worktree sheet already set to carry the current changes across.
     var branchChangesRequested = false
     /// Open the Stash sheet for the selected worktree.
+    var securityScanRequested = false
     var stashRequested = false
     /// A drafted commit subject offered by Stage All, for the commit editor to adopt when
     /// its own message is still empty.
@@ -247,6 +258,7 @@ final class AppCommands {
     func openRecent(_ recent: RecentRepository) { pendingRecent = recent }
     func ignore(path: String) { ignoreRequest = IgnoreRequest(path: path) }
     func branchChanges() { branchChangesRequested = true }
+    func securityScan() { securityScanRequested = true }
     func stash() { stashRequested = true }
     func suggestCommitMessage(_ message: String) {
         if !message.isEmpty { pendingCommitMessage = message }
@@ -255,6 +267,7 @@ final class AppCommands {
 
 /// Menu commands target the key repository window.
 private struct GitTreesCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.repositoryService) private var focusedService
     @FocusedValue(\.appCommands) private var focusedCommands
 
@@ -267,6 +280,12 @@ private struct GitTreesCommands: Commands {
     private var hasNoWorktree: Bool { service?.selectedWorktree == nil }
 
     var body: some Commands {
+        CommandGroup(replacing: .help) {
+            Button("GitTrees Help") { openWindow(id: "help") }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+            Button("Acknowledgements…") { openWindow(id: "acknowledgements") }
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Window") { commands?.newWindow() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -343,6 +362,12 @@ private struct GitTreesCommands: Commands {
             Button("Stash Changes…") { commands?.stash() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(hasNoWorktree || service?.status.isClean != false)
+
+            Divider()
+
+            Button("Security Scan…") { commands?.securityScan() }
+                .disabled(hasNoWorktree || service?.selectedWorktree?.isBare == true
+                          || service?.selectedWorktree?.isMissingOnDisk == true)
 
             Divider()
 

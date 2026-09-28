@@ -8,6 +8,7 @@ struct PreferencesView: View {
     @Environment(RepositoryService.self) private var service
     @Environment(WorkspaceLauncher.self) private var launcher
 
+    @State private var choosingSemgrepExecutable = false
     @State private var choosingGitExecutable = false
     @State private var choosingGitHubExecutable = false
 
@@ -117,6 +118,28 @@ struct PreferencesView: View {
                         service.rebuildClientIfNeeded()
                     }
                 }
+            }
+
+            Section("Security Scan") {
+                LabelledFieldRow(label: "Semgrep executable") {
+                    HStack(spacing: 6) {
+                        TextField("", text: $preferences.semgrepExecutablePath)
+                            .labelsHidden().textFieldStyle(.roundedBorder)
+                            .font(GitTreesUI.monospaced)
+                        Button("Choose…") { choosingSemgrepExecutable = true }
+                            .fileImporter(isPresented: $choosingSemgrepExecutable,
+                                          allowedContentTypes: [.item]) { result in
+                                if case .success(let url) = result { preferences.semgrepExecutablePath = url.path }
+                            }
+                    }
+                }
+                if !FileManager.default.isExecutableFile(atPath: preferences.semgrepExecutablePath) {
+                    Label("Semgrep is not installed at this path.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange).font(.caption)
+                }
+                Text("Install with brew install semgrep or pipx install semgrep. Then choose Repository → Security Scan. GitTrees runs local rules with metrics and version checks disabled; it never applies fixes.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Link("Semgrep installation instructions", destination: URL(string: "https://semgrep.dev/docs/getting-started/quickstart")!)
             }
 
             Section("Display") {

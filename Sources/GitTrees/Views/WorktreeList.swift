@@ -60,11 +60,25 @@ struct WorktreeRow: View {
                     }
                 }
 
-                Text(RepositorySidebar.abbreviate(worktree.path))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
+                HStack(spacing: 6) {
+                    Text(RepositorySidebar.abbreviate(worktree.path))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+
+                    Spacer(minLength: 2)
+
+                    if let lastActivityDate {
+                        Text(
+                            lastActivityDate,
+                            format: .relative(presentation: .numeric, unitsStyle: .abbreviated)
+                        )
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .accessibilityLabel("Last activity \(lastActivityDate.formatted())")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
                 if let staleNote {
                     Text(staleNote)
@@ -73,6 +87,7 @@ struct WorktreeRow: View {
                         .lineLimit(1)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
 
@@ -81,7 +96,22 @@ struct WorktreeRow: View {
             }
         }
         .padding(.vertical, 1)
-        .help(worktree.path.path)
+        .help(helpText)
+    }
+
+    private var lastActivityDate: Date? {
+        service.lastActivityDate(for: worktree)
+    }
+
+    private var helpText: String {
+        var lines = [worktree.path.path]
+        if let lastActivityDate {
+            lines.append(
+                "Last activity: \(lastActivityDate.formatted(date: .long, time: .standard))"
+            )
+            lines.append("Based on the latest changed file, worktree update, or commit.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Git's own reason is shown rather than a generic message, because "gitdir file

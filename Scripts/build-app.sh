@@ -24,10 +24,12 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY" "$MACOS_DIR/GitTrees"
 
-# SwiftPM resource bundles (tokenizer, Core ML package) live next to the executable.
-# Without them Bundle.module cannot find CommitIntentModel inside the .app.
+# Current SwiftPM accessors search Bundle.main.resourceURL in an app. Keep a
+# sibling symlink for older accessors that resolve resources beside the executable.
 while IFS= read -r bundle; do
-    cp -R "$bundle" "$MACOS_DIR/"
+    bundle_name="$(basename "$bundle")"
+    cp -R "$bundle" "$RESOURCES_DIR/"
+    ln -s "../Resources/$bundle_name" "$MACOS_DIR/$bundle_name"
 done < <(find "$BIN_DIR" -maxdepth 1 -name "*.bundle")
 
 # Also copy the model directory into Contents/Resources as a Bundle.main fallback.
@@ -76,9 +78,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2</string>
+    <string>1.3</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

@@ -250,6 +250,28 @@ struct GitClientIntegrationTests {
 
     // MARK: - Worktrees
 
+    @Test("worktree activity follows edits and still dates a clean worktree")
+    func worktreeActivity() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        let clean = try await fixture.client.worktreeActivity(worktree: fixture.repository)
+        #expect(!clean.isDirty)
+        #expect(clean.lastActivityAt != nil)
+
+        try fixture.write("changed\n", to: "README.md")
+        let editedAt = Date().addingTimeInterval(30)
+        try FileManager.default.setAttributes(
+            [.modificationDate: editedAt],
+            ofItemAtPath: fixture.repository.appendingPathComponent("README.md").path
+        )
+
+        let dirty = try await fixture.client.worktreeActivity(worktree: fixture.repository)
+        #expect(dirty.isDirty)
+        let lastActivityAt = try #require(dirty.lastActivityAt)
+        #expect(abs(lastActivityAt.timeIntervalSince(editedAt)) < 1)
+    }
+
     @Test("creating, locking, unlocking and removing a worktree round-trips")
     func worktreeLifecycle() async throws {
         let fixture = try await Fixture()

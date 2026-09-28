@@ -15,7 +15,8 @@ let package = Package(
         .target(
             name: "GitTreesCore",
             resources: [
-                .copy("Resources/CommitIntentModel")
+                .copy("Resources/CommitIntentModel"),
+                .copy("Resources/SecurityRules")
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -23,6 +24,7 @@ let package = Package(
         .executableTarget(
             name: "GitTrees",
             dependencies: ["GitTreesCore"],
+            resources: [.copy("Resources/Acknowledgements")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

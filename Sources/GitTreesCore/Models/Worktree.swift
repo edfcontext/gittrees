@@ -69,6 +69,22 @@ public struct Worktree: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Sidebar metadata gathered for a live worktree.
+///
+/// `lastActivityAt` is an intentionally inexpensive estimate: the newest timestamp
+/// among the worktree directory, its currently changed paths, and the checked-out
+/// commit. It reflects active edits and newly created worktrees without recursively
+/// walking build products or other ignored directories.
+public struct WorktreeActivity: Sendable, Equatable {
+    public var isDirty: Bool
+    public var lastActivityAt: Date?
+
+    public init(isDirty: Bool, lastActivityAt: Date?) {
+        self.isDirty = isDirty
+        self.lastActivityAt = lastActivityAt
+    }
+}
+
 /// Helpers for translating between fully qualified and short ref names.
 public enum RefName {
     public static let localPrefix = "refs/heads/"

@@ -309,6 +309,60 @@ public final class GitClient: Sendable {
         return !result.stdout.isEmpty
     }
 
+    /// Returns the sidebar's dirty flag and an inexpensive estimate of when this
+    /// worktree was last active.
+    ///
+    /// The status uses Git's shallow untracked-directory mode so loading a repository
+    /// with several worktrees does not recursively walk every untracked build tree.
+    /// Existing changed files contribute their modification dates; the worktree root
+    /// covers creation and top-level additions/removals; and the HEAD committer date
+    /// gives clean worktrees a useful baseline.
+    public func worktreeActivity(worktree: URL) async throws -> WorktreeActivity {
+        async let statusResult = run(
+            [
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--untracked-files=normal"
+            ],
+            in: worktree
+        )
+        async let commitResult = run(
+            ["log", "-1", "--format=%cI"],
+            in: worktree,
+            acceptableExitCodes: [0, 128]
+        )
+
+        let (statusOutput, commitOutput) = try await (statusResult, commitResult)
+        let status = try StatusParser.parse(statusOutput.stdout)
+        var dates = status.changes.compactMap { change in
+            modificationDate(for: change.path, in: worktree)
+        }
+        if let rootDate = modificationDate(at: worktree) {
+            dates.append(rootDate)
+        }
+        if commitOutput.exitCode == 0,
+           let commitDate = ISO8601DateFormatter().date(from: commitOutput.trimmedStdout) {
+            dates.append(commitDate)
+        }
+
+        return WorktreeActivity(isDirty: !status.changes.isEmpty, lastActivityAt: dates.max())
+    }
+
+    private func modificationDate(for relativePath: String, in worktree: URL) -> Date? {
+        let root = worktree.standardizedFileURL
+        let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
+        guard candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") else {
+            return nil
+        }
+        return modificationDate(at: candidate)
+    }
+
+    private func modificationDate(at url: URL) -> Date? {
+        try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
     // MARK: - Conflict resolution
 
     /// A multi-step Git operation that a conflict interrupted, so callers can abort the

@@ -134,6 +134,8 @@ public final class RepositoryService {
     /// Dirty flag per worktree path, filled in by a background scan so the sidebar can
     /// show which worktrees have uncommitted work without blocking the first paint.
     public private(set) var dirtyStates: [String: Bool] = [:]
+    /// Best-effort last activity per worktree, gathered alongside the dirty scan.
+    public private(set) var worktreeActivityDates: [String: Date] = [:]
     /// Remotes configured on the repository.
     public private(set) var remotes: [Remote] = []
     /// The commit identity a commit in the selected worktree would use.
@@ -298,6 +300,10 @@ public final class RepositoryService {
         dirtyStates[worktree.id]
     }
 
+    public func lastActivityDate(for worktree: Worktree) -> Date? {
+        worktreeActivityDates[worktree.id]
+    }
+
     public func isBusy(_ worktree: Worktree) -> Bool {
         busyWorktreePaths.contains(worktree.id)
     }
@@ -398,6 +404,7 @@ public final class RepositoryService {
         selectedFileKeys = []
         selectedFile = nil
         dirtyStates = [:]
+        worktreeActivityDates = [:]
         remotes = []
         stashes = []
         selectedStashID = nil
@@ -509,7 +516,7 @@ public final class RepositoryService {
             if let selectedWorktreePath, !worktrees.contains(where: { $0.id == selectedWorktreePath }) {
                 self.selectedWorktreePath = worktrees.first { !$0.isBare }?.id
             }
-            scanDirtyStates()
+            scanWorktreeActivity()
             await refreshIdentity()
             refreshGitHub()
             return true
@@ -524,27 +531,33 @@ public final class RepositoryService {
         }
     }
 
-    /// Runs `git status` in every live worktree concurrently and publishes the results
-    /// in one update, so the sidebar does not flicker row by row.
-    private func scanDirtyStates() {
+    /// Reads activity in every live worktree concurrently and publishes the results in
+    /// one update, so the sidebar's indicators and timestamps do not flicker row by row.
+    private func scanWorktreeActivity() {
         dirtyScanTask?.cancel()
         let targets = worktrees.filter { !$0.isBare && !$0.isPrunable && !$0.isMissingOnDisk }
         let client = self.client
         dirtyScanTask = Task { [weak self] in
-            var results: [String: Bool] = [:]
-            await withTaskGroup(of: (String, Bool)?.self) { group in
+            var dirtyResults: [String: Bool] = [:]
+            var activityResults: [String: Date] = [:]
+            await withTaskGroup(of: (String, WorktreeActivity)?.self) { group in
                 for worktree in targets {
                     group.addTask {
-                        guard let dirty = try? await client.isDirty(worktree: worktree.path) else { return nil }
-                        return (worktree.id, dirty)
+                        guard let activity = try? await client.worktreeActivity(worktree: worktree.path) else {
+                            return nil
+                        }
+                        return (worktree.id, activity)
                     }
                 }
                 for await result in group {
-                    if let result { results[result.0] = result.1 }
+                    guard let result else { continue }
+                    dirtyResults[result.0] = result.1.isDirty
+                    activityResults[result.0] = result.1.lastActivityAt
                 }
             }
             guard !Task.isCancelled else { return }
-            self?.dirtyStates = results
+            self?.dirtyStates = dirtyResults
+            self?.worktreeActivityDates = activityResults
         }
     }
 
