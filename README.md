@@ -15,25 +15,24 @@ worktrees and branches, work in one of them, commit, and sync with a remote.
 On supported Macs running macOS 26 or later, commit suggestions use Apple
 Intelligence through the Foundation Models framework. Enable Apple Intelligence in
 System Settings and allow its on-device model to finish downloading. Build with
-the macOS 26 SDK or newer to include this provider; older SDKs retain the fallback.
+the macOS 26 SDK or newer to include this provider.
 
 Suggestions are generated locally from the staged diff. Large diffs are abbreviated,
 and generated/lock-file contents are omitted from the evidence. Review the editable
 subject before committing. No diff is sent to a cloud service, and no API key is needed.
-If Apple Intelligence is unavailable or fails, GitTrees uses its bundled Core ML
-classifier, then a file-name summary if classifier confidence is too low. The footer
-identifies the provider or explains the fallback. macOS 14 remains supported.
+If Apple Intelligence is unavailable or fails, GitTrees uses a deterministic filename
+summary. The footer identifies the provider or explains the fallback. macOS 14 remains
+supported, with filename summaries on systems that cannot use Foundation Models.
 
 `swift test` covers provider selection and fallback behavior without requiring Apple
-Intelligence. To also compare live on-device suggestions against the bundled model
-on three synthetic diffs, run
+Intelligence. To exercise live on-device suggestions on three synthetic diffs, run
 `GITTREES_TEST_APPLE_INTELLIGENCE=1 swift test --filter AppleIntelligenceCommitDrafterTests`.
 
 ## Help, acknowledgements and security scanning
 
-Version **1.3 (build 4)** adds **Help → GitTrees Help** and **Help → Acknowledgements**.
-The latter includes notices and the Apache 2.0 license for the bundled MiniLM-derived
-model and tokenizer assets. There are no third-party Swift package dependencies.
+Version **1.3 (build 5)** includes **Help → GitTrees Help** and **Help → Acknowledgements**.
+GitTrees bundles no third-party code, models or Swift package dependencies; the
+acknowledgements identify optional external tools used from the local environment.
 
 Select a worktree and choose **Repository → Security Scan…** to run Semgrep CE locally.
 Install the optional executable with `brew install semgrep` or `pipx install semgrep`,
@@ -59,7 +58,7 @@ CI runs the same checked-in rules as a blocking Semgrep 1.178.0 scan. Findings a
 scan/configuration failures fail the job; partial-parse warnings remain non-fatal
 because Semgrep's Swift support is experimental. Run it locally with
 `Scripts/run-semgrep.sh` (or set `SEMGREP_PATH` to an executable). The security workflow
-also validates the shipped third-party notices on every run and reviews pull request
+also validates the shipped dependency inventory on every run and reviews pull request
 dependency changes against the license and vulnerability rules in
 [`OSS_POLICY.md`](OSS_POLICY.md). Neither scan runs as part of `Scripts/build-app.sh`;
 they are independent CI gates so a local distributable build does not install tools or

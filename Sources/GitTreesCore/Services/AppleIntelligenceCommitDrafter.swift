@@ -58,7 +58,7 @@ enum AppleIntelligenceCommitDrafter {
     /// otherwise exhaust the small on-device context window. Overflow still falls back.
     static func prompt(changes: [FileChange], diff: String) -> String {
         let paths = changes.prefix(30).map { String($0.path.prefix(160)) }.joined(separator: "\n")
-        let evidence = DiffNormalizer.generativeEvidence(diff)
+        let evidence = CommitDiffEvidence.extract(from: diff)
         return """
             Summarize these \(changes.count) staged files.
             File names (possibly abbreviated):

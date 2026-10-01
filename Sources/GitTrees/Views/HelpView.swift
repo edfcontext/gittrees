@@ -49,15 +49,6 @@ struct AcknowledgementsView: View {
                 Text("Acknowledgements").font(.title.bold())
                 Text(resource("THIRD_PARTY_NOTICES")).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Link("Upstream MiniLM model and license information",
-                     destination: URL(string: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2")!)
-                Divider()
-                DisclosureGroup("Apache License 2.0 — full text") {
-                    Text(resource("Apache-2.0"))
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 8)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)

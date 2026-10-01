@@ -688,8 +688,8 @@ public final class GitClient: Sendable {
 
     /// Unified diff of everything currently in the index (`git diff --cached`).
     ///
-    /// This is the raw text the commit-intent model normalizes. Context lines are
-    /// dropped by `DiffNormalizer`; `-U3` matches the `git show -p` diffs used to train.
+    /// This is the raw text provided to the local commit-subject drafter. Three context
+    /// lines give Apple Intelligence enough surrounding code to interpret additions.
     public func stagedDiff(worktree: URL, contextLines: Int = 3) async throws -> String {
         let result = try await run(
             ["diff", "--cached", "--no-color", "--no-ext-diff", "-U\(contextLines)"],

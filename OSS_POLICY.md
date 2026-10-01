@@ -19,14 +19,11 @@ known vulnerability of moderate severity or higher.
 
 ## Current distributable inventory
 
-GitTrees has no external Swift package dependencies. The distributable includes the
-modified `sentence-transformers/all-MiniLM-L6-v2` model and tokenizer assets under
-Apache-2.0. Its attribution and full license are packaged from
-`Sources/GitTrees/Resources/Acknowledgements`.
+GitTrees bundles no third-party code, models or Swift package dependencies.
 
 Development-only system tools such as Git, GitHub CLI and Semgrep are invoked from the
 user or CI environment and are not redistributed in `GitTrees.app`.
 
-Run `Scripts/check-oss-policy.sh` locally after changing dependencies, model assets,
+Run `Scripts/check-oss-policy.sh` locally after changing dependencies, assets,
 acknowledgements or packaging. Pull requests additionally use GitHub's dependency
 review to enforce the license allowlist and vulnerability threshold.

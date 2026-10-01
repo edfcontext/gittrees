@@ -126,7 +126,7 @@ struct NewWorktreeSheet: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                if let conflict = branchNameConflict {
+                if let conflict = branchNameConflict, !isCreating {
                     Label(conflict, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -168,7 +168,7 @@ struct NewWorktreeSheet: View {
                     .foregroundStyle(.secondary)
             }
 
-            if locationExists {
+            if locationExists, !isCreating {
                 Label("That directory already exists. Git will refuse to use it.", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -419,11 +419,14 @@ struct NewWorktreeSheet: View {
         Task {
             let created = await service.createWorktree(request)
             isCreating = false
+            // A failure raises `service.lastError`, which MainView presents over the sheet;
+            // keep the sheet open only then. On success, dismiss before launching the editor
+            // so the dialog never lingers behind the editor's own startup.
             guard let created else { return }
+            dismiss()
             if request.openInEditor {
                 try? await launcher.open(created.path, in: preferences.preferredEditor)
             }
-            dismiss()
         }
     }
 }

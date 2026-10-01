@@ -333,4 +333,21 @@ struct MoveChangesTests {
         #expect(fixture.service.stashes.count == 1)
         #expect(fixture.service.lastError == nil)
     }
+
+    @Test("a plain creation returns the worktree even when the root is a symlinked path")
+    func plainCreationReturnsTheWorktree() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        // The temporary root lives under /var, a symlink to /private/var, so `git worktree
+        // list` reports a resolved path that a plain `standardizedFileURL` match misses.
+        // The caller relies on a non-nil return to dismiss its dialog and open the editor.
+        let created = await fixture.service.createWorktree(
+            fixture.request(branch: "feature/plain", directory: "plain work", changes: .leave)
+        )
+
+        let worktree = try #require(created, "creation succeeded but returned nil")
+        #expect(worktree.branchName == "feature/plain")
+        #expect(fixture.service.lastError == nil)
+    }
 }

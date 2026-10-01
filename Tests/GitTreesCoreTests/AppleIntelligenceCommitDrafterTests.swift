@@ -21,7 +21,7 @@ struct AppleIntelligenceCommitDrafterTests {
         """
     }
 
-    @Test("generation is preferred and does not fabricate classifier confidence")
+    @Test("generation is preferred over the filename fallback")
     func generatedSubject() async {
         let service = CommitDescriptionService { changes, diff in
             #expect(changes.count == 1)
@@ -31,9 +31,6 @@ struct AppleIntelligenceCommitDrafterTests {
         let result = await service.suggest(stagedChanges: [change], stagedDiff: diff)
         #expect(result.message == "Prevent expired cache entries from being returned")
         #expect(result.source == .appleIntelligence)
-        #expect(result.confidence == 0)
-        #expect(result.confidencePerHead.isEmpty)
-        #expect(!result.belowThreshold)
         #expect(result.diagnostic == "Apple Intelligence · On-device")
     }
 
@@ -65,7 +62,7 @@ struct AppleIntelligenceCommitDrafterTests {
         #expect(result.diagnostic.hasSuffix(expected.diagnostic))
     }
 
-    @Test("cancelled generation does not invoke the model fallback")
+    @Test("cancelled generation returns an empty filename fallback")
     func cancellation() async {
         let service = CommitDescriptionService { _, _ in throw CancellationError() }
         let result = await service.suggest(stagedChanges: [change], stagedDiff: diff)
@@ -130,14 +127,14 @@ struct AppleIntelligenceCommitDrafterTests {
              }
             """)
         ]
-        let legacy = CommitDescriptionService()
+        let fallback = CommitDescriptionService()
         for (change, diff) in samples {
             let generated = try await AppleIntelligenceCommitDrafter.draft(changes: [change], diff: diff)
             print("Raw Apple Intelligence subject (\(change.path)): \(generated)")
             let subject = try AppleIntelligenceCommitDrafter.validatedSubject(generated)
-            let old = legacy.suggestNow(stagedChanges: [change], stagedDiff: diff)
+            let local = fallback.suggestNow(stagedChanges: [change], stagedDiff: diff)
             print("Apple Intelligence sample (\(change.path)): \(subject)")
-            print("Existing model sample: \(old.message)")
+            print("Filename fallback sample: \(local.message)")
         }
     }
 }

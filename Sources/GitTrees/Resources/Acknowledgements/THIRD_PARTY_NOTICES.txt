@@ -1,13 +1,4 @@
-GitTrees includes the following third-party model assets:
-
-Sentence Transformers — all-MiniLM-L6-v2
-Source: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
-License: Apache License, Version 2.0
-Credit: The Sentence Transformers model authors and contributors, and the MiniLM authors.
-
-The bundled gittrees-commit-intent model uses this encoder and its BERT WordPiece tokenizer assets. GitTrees' model pipeline fine-tuned the encoder for commit-intent classification, added classification heads, converted the result to Core ML, and quantized the weights. The included model is a modified derivative, not the original sentence-embedding model. The Apache 2.0 license text is included with this page.
-
-The app currently declares no third-party Swift package dependencies. Its Swift tokenizer implementation reads the bundled vocabulary; the Python Transformers and Tokenizers libraries are not bundled in the app.
+GitTrees currently bundles no third-party code, models or package dependencies.
 
 External tools and system frameworks
 
@@ -15,7 +6,7 @@ GitTrees invokes your installed Git and, for GitHub features, the GitHub CLI. Th
 Git: https://git-scm.com/about/free-and-open-source
 GitHub CLI: https://github.com/cli/cli/blob/trunk/LICENSE
 
-SwiftUI, AppKit, Foundation, Core ML and Foundation Models are supplied by Apple. Model training and conversion tools such as PyTorch, NumPy, Transformers and coremltools are development tools and are not shipped as Python libraries in GitTrees.
+SwiftUI, AppKit, Foundation and Foundation Models are supplied by Apple.
 
 Semgrep Community Edition
 Optional, separately installed security scanner: https://semgrep.dev

@@ -830,11 +830,25 @@ public final class RepositoryService {
             PresentableError(title: "Could Not Create Worktree", error: error)
         } thenReturning: { [weak self] () -> Worktree? in
             await self?.reload()
-            let worktree = self?.worktrees.first { $0.path == request.path.standardizedFileURL }
+            let worktree = self?.worktree(at: request.path)
             if let worktree { self?.selectedWorktreePath = worktree.id }
             return worktree
         }
         return created ?? nil
+    }
+
+    /// Finds the worktree created for `path` in the refreshed list.
+    ///
+    /// `git worktree list` reports the path as it resolves on disk, which can differ from
+    /// the one the request carried once a parent directory is a symlink (`/var` ->
+    /// `/private/var`, a home under a linked volume). A plain `standardizedFileURL` match
+    /// does not resolve symlinks, so it would miss the row for a worktree that was in fact
+    /// created — and the caller, reading that nil as failure, would leave its dialog open
+    /// with a stale "already exists" warning. Resolving both sides makes the match hold.
+    private func worktree(at path: URL) -> Worktree? {
+        let target = path.resolvingSymlinksInPath()
+        return worktrees.first { $0.path.resolvingSymlinksInPath() == target }
+            ?? worktrees.first { $0.path == path.standardizedFileURL }
     }
 
     /// Creates the worktree and carries `source`'s uncommitted work into it.
@@ -931,7 +945,7 @@ public final class RepositoryService {
             PresentableError(title: "Could Not Move Changes", error: error)
         } thenReturning: { [weak self] () -> Worktree? in
             await self?.reload()
-            let worktree = self?.worktrees.first { $0.path == request.path.standardizedFileURL }
+            let worktree = self?.worktree(at: request.path)
             if let worktree { self?.selectedWorktreePath = worktree.id }
             return worktree
         }
@@ -1479,7 +1493,7 @@ public final class RepositoryService {
 
     // MARK: - Diff
 
-    /// Unified diff of the current index, for the commit-intent model.
+    /// Unified diff of the current index, for the commit-subject drafter.
     public func stagedDiff() async throws -> String {
         guard let worktree = selectedWorktree else { return "" }
         return try await client.stagedDiff(worktree: worktree.path)

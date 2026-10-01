@@ -32,12 +32,6 @@ while IFS= read -r bundle; do
     ln -s "../Resources/$bundle_name" "$MACOS_DIR/$bundle_name"
 done < <(find "$BIN_DIR" -maxdepth 1 -name "*.bundle" ! -name "*Tests.bundle")
 
-# Also copy the model directory into Contents/Resources as a Bundle.main fallback.
-CORE_MODEL="$ROOT_DIR/Sources/GitTreesCore/Resources/CommitIntentModel"
-if [[ -d "$CORE_MODEL" ]]; then
-    cp -R "$CORE_MODEL" "$RESOURCES_DIR/CommitIntentModel"
-fi
-
 # Icon artwork, most specific first. A square PNG of at least 512x512 works best;
 # the macOS squircle and its margin should already be part of the artwork.
 ICON_SOURCE=""
@@ -80,7 +74,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key>
     <string>1.3</string>
     <key>CFBundleVersion</key>
-    <string>4</string>
+    <string>5</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
