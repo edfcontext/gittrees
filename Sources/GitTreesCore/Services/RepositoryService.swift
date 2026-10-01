@@ -2022,6 +2022,32 @@ public final class RepositoryService {
         return added ?? false
     }
 
+    /// Repoints an existing remote at a new URL with `git remote set-url`.
+    ///
+    /// The common reason is switching the host — e.g. a plain `git@github.com:…` to an SSH
+    /// config alias like `git@github-ctx:…` so the repository authenticates as the right
+    /// account. The reload afterwards refreshes GitHub detection, which keys off the URL.
+    public func setRemoteURL(name: String, url: String) async -> Bool {
+        guard let repository else { return false }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedURL.isEmpty else { return false }
+
+        let updated = await withOperation(label: "Updating remote…") { [client] in
+            try await client.setRemoteURL(
+                repository: repository.commandDirectory,
+                name: trimmedName,
+                url: trimmedURL
+            )
+        } onFailure: { error in
+            PresentableError(title: "Could Not Update Remote", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            return true
+        }
+        return updated ?? false
+    }
+
     /// Remote names already taken, so the sheet can say so before Git has to.
     public var remoteNames: Set<String> {
         Set(remotes.map(\.name))

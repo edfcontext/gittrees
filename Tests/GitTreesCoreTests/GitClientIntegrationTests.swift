@@ -554,6 +554,42 @@ struct GitClientIntegrationTests {
         #expect(remotes[0].fetchURL == "git@github.com:owner/summit.git")
     }
 
+    @Test("set-url repoints an existing remote, e.g. to an SSH config alias")
+    func setRemoteURLRepointsExisting() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try await client.addRemote(
+            repository: fixture.repository,
+            name: "origin",
+            url: "git@github.com:Nalcus/homepage.git"
+        )
+
+        try await client.setRemoteURL(
+            repository: fixture.repository,
+            name: "origin",
+            url: "git@github-ctx:Nalcus/homepage.git"
+        )
+
+        let remotes = try await client.remotes(repository: fixture.repository)
+        #expect(remotes.map(\.fetchURL) == ["git@github-ctx:Nalcus/homepage.git"])
+    }
+
+    @Test("set-url on a remote that does not exist is surfaced as an error")
+    func setRemoteURLUnknownRemote() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+
+        await #expect(throws: GitError.self) {
+            try await fixture.client.setRemoteURL(
+                repository: fixture.repository,
+                name: "origin",
+                url: "git@github-ctx:Nalcus/homepage.git"
+            )
+        }
+    }
+
     @Test("adding a remote whose name is taken is refused by Git")
     func addDuplicateRemote() async throws {
         let fixture = try await Fixture()

@@ -951,6 +951,15 @@ public final class GitClient: Sendable {
         _ = try await run(["remote", "add", name, url], in: repository)
     }
 
+    /// `git remote set-url <name> <url>` — repoint an existing remote.
+    ///
+    /// Git rejects an unknown remote itself (exit 2/128), so no "does it exist" check is
+    /// reimplemented here. Only the fetch URL is set; a separately configured push URL,
+    /// which GitTrees does not create, is left untouched.
+    public func setRemoteURL(repository: URL, name: String, url: String) async throws {
+        _ = try await run(["remote", "set-url", name, url], in: repository)
+    }
+
     // MARK: - History
 
     private static let logFormat = ["%H", "%h", "%an", "%aI", "%D", "%s"].joined(separator: "%x00")

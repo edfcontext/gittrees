@@ -1,11 +1,13 @@
 import GitTreesCore
 import SwiftUI
 
-/// Adds a remote with `git remote add`.
+/// Adds a remote with `git remote add`, and repoints an existing one with
+/// `git remote set-url`.
 ///
-/// Deliberately minimal: a name and a URL. Renaming, changing a URL and removing a
-/// remote are still command-line work, but a repository created here can now be
-/// connected to something, which `git init` on its own left impossible.
+/// Adding takes a name and a URL; each existing remote can have its URL edited in place —
+/// the common reason being a host switch, e.g. `git@github.com:…` to an SSH alias like
+/// `git@github-ctx:…` so the repository authenticates as the right account. Renaming and
+/// removing a remote are still command-line work.
 struct AddRemoteSheet: View {
     @Environment(RepositoryService.self) private var service
     @Environment(\.dismiss) private var dismiss
@@ -14,6 +16,13 @@ struct AddRemoteSheet: View {
     @State private var url = ""
     @State private var isAdding = false
     @FocusState private var urlFocused: Bool
+
+    /// The remote whose URL is being edited in the list, and the draft being typed. Only
+    /// one row edits at a time; `nil` means the list is showing plain values.
+    @State private var editingRemote: String?
+    @State private var editedURL = ""
+    @State private var isUpdating = false
+    @FocusState private var editedURLFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,13 +59,7 @@ struct AddRemoteSheet: View {
                 if !service.remotes.isEmpty {
                     Section("Existing Remotes") {
                         ForEach(service.remotes) { remote in
-                            LabeledContent(remote.name) {
-                                Text(remote.fetchURL ?? "No URL configured")
-                                    .font(GitTreesUI.monospaced)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
+                            remoteRow(remote)
                         }
                     }
                 }
@@ -111,6 +114,72 @@ struct AddRemoteSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    /// One existing-remote row: its URL, read-only with an Edit button, or an editable
+    /// field with Save/Cancel while this is the row being edited.
+    @ViewBuilder
+    private func remoteRow(_ remote: Remote) -> some View {
+        if editingRemote == remote.name {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(remote.name)
+                    Spacer(minLength: 0)
+                }
+                TextField("", text: $editedURL, prompt: Text("git@github-ctx:owner/repo.git"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .font(GitTreesUI.monospaced)
+                    .focused($editedURLFocused)
+                    .onSubmit { saveEdit(remote) }
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button("Cancel") { cancelEdit() }
+                        .disabled(isUpdating)
+                    Button("Save") { saveEdit(remote) }
+                        .disabled(!canSaveEdit || isUpdating)
+                    if isUpdating { ProgressView().controlSize(.small) }
+                }
+            }
+        } else {
+            LabeledContent(remote.name) {
+                HStack(spacing: 8) {
+                    Text(remote.fetchURL ?? "No URL configured")
+                        .font(GitTreesUI.monospaced)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Edit…") { beginEditing(remote) }
+                        .disabled(isAdding || isUpdating || editingRemote != nil)
+                }
+            }
+        }
+    }
+
+    private var canSaveEdit: Bool {
+        !editedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func beginEditing(_ remote: Remote) {
+        editedURL = remote.fetchURL ?? ""
+        editingRemote = remote.name
+        editedURLFocused = true
+    }
+
+    private func cancelEdit() {
+        editingRemote = nil
+        editedURL = ""
+    }
+
+    private func saveEdit(_ remote: Remote) {
+        guard canSaveEdit else { return }
+        let newURL = editedURL
+        isUpdating = true
+        Task {
+            let updated = await service.setRemoteURL(name: remote.name, url: newURL)
+            isUpdating = false
+            if updated { cancelEdit() }
+        }
     }
 
     /// Only the cases worth catching before Git does; Git remains the authority on
