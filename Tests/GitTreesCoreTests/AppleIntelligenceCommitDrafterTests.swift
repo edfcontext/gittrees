@@ -104,6 +104,28 @@ struct AppleIntelligenceCommitDrafterTests {
         #expect(!prompt.contains("DO_NOT_INCLUDE_LOCK_CONTENT"))
     }
 
+    @Test("large first patch leaves evidence from later implementation files")
+    func evidenceAcrossFiles() {
+        let patches = [
+            ("Sources/GitTrees/Views/AddRemoteSheet.swift", String(repeating: "+view change\n", count: 450)),
+            ("Sources/GitTreesCore/Git/GitClient.swift", "+func setRemoteURL() { updateRemote() }\n" + String(repeating: "+client context\n", count: 45)),
+            ("Sources/GitTreesCore/Services/RepositoryService.swift", "+func setRemoteURL() { client.setRemoteURL() }\n" + String(repeating: "+service context\n", count: 100)),
+            ("Tests/GitTreesCoreTests/GitClientIntegrationTests.swift", "+func testSetRemoteURL() { verifyRemote() }\n" + String(repeating: "+test context\n", count: 110))
+        ]
+        let stagedDiff = patches.map { path, body in
+            "diff --git a/\(path) b/\(path)\n@@ -1,1 +1,2 @@\n\(body)"
+        }.joined(separator: "\n")
+        let changes = patches.map { path, _ in
+            FileChange(path: path, indexStatus: .modified, worktreeStatus: .unmodified)
+        }
+        let prompt = AppleIntelligenceCommitDrafter.prompt(changes: changes, diff: stagedDiff)
+        #expect(prompt.utf8.count < 6_500)
+        #expect(prompt.contains("+func setRemoteURL() { updateRemote() }"))
+        #expect(prompt.contains("+func setRemoteURL() { client.setRemoteURL() }"))
+        #expect(prompt.contains("+func testSetRemoteURL() { verifyRemote() }"))
+        #expect(CommitDiffEvidence.extract(from: stagedDiff, bytes: 5_000).utf8.count <= 5_000)
+    }
+
     @Test("live on-device generation", .enabled(if: ProcessInfo.processInfo.environment["GITTREES_TEST_APPLE_INTELLIGENCE"] == "1"))
     func liveGeneration() async throws {
         let samples = [

@@ -23,12 +23,46 @@ enum CommitDiffEvidence {
         }
     }
 
-    static func extract(from diff: String) -> String {
-        splitFiles(diff).map { file, body in
+    /// Share a fixed prompt budget across files so a large early patch cannot hide later ones.
+    static func extract(from diff: String, bytes: Int) -> String {
+        let files = splitFiles(diff).map { file, body in
             let header = "\(file.kind) \(file.path)"
-            guard !file.isGenerated else { return header + "\n[generated contents omitted]" }
-            return ([header] + body).joined(separator: "\n")
-        }.joined(separator: "\n\n")
+            return file.isGenerated ? header + "\n[generated contents omitted]"
+                : ([header] + body).joined(separator: "\n")
+        }
+        guard !files.isEmpty else { return "" }
+        let separatorBytes = 2 * (files.count - 1)
+        let marker = "\n[truncated]"
+        guard separatorBytes + marker.utf8.count <= bytes else { return "[truncated]" }
+        let available = max(0, bytes - separatorBytes - marker.utf8.count)
+        var allocations = Array(repeating: 0, count: files.count)
+        var remaining = available
+        var pending = Array(files.indices)
+        while remaining > 0 && !pending.isEmpty {
+            let share = max(1, remaining / pending.count)
+            var next: [Int] = []
+            for index in pending {
+                let added = min(share, remaining, files[index].utf8.count - allocations[index])
+                allocations[index] += added
+                remaining -= added
+                if allocations[index] < files[index].utf8.count { next.append(index) }
+            }
+            pending = next
+        }
+        let truncated = files.indices.contains { allocations[$0] < files[$0].utf8.count }
+        let sections = files.indices.map { index in
+            var result = ""
+            var used = 0
+            for scalar in files[index].unicodeScalars {
+                let value = String(scalar)
+                let size = value.utf8.count
+                guard used + size <= allocations[index] else { break }
+                result += value
+                used += size
+            }
+            return result
+        }
+        return sections.joined(separator: "\n\n") + (truncated ? marker : "")
     }
 
     private static func splitFiles(_ diff: String) -> [(ChangedFile, [String])] {
