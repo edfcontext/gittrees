@@ -23,6 +23,7 @@ struct WorktreeDetailView: View {
     let onRequestLock: (Worktree) -> Void
     let onAddRemote: () -> Void
     let onCreatePullRequest: () -> Void
+    let onCreateWorktreeAtCommit: (CommitSummary) -> Void
 
     @State private var tab: Tab = .changes
 
@@ -92,7 +93,7 @@ struct WorktreeDetailView: View {
             case .changes:
                 ChangesView()
             case .history:
-                HistoryView()
+                HistoryView(onCreateWorktreeAtCommit: onCreateWorktreeAtCommit)
             case .stashes:
                 StashView()
             case .branchInfo:
@@ -117,6 +118,7 @@ struct WorktreeHeaderBar: View {
 
     @State private var confirmingForcePush = false
     @State private var showingBranchIntegration = false
+    @State private var copiedPath = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -146,6 +148,8 @@ struct WorktreeHeaderBar: View {
                         .truncationMode(.head)
                         .layoutPriority(-1)
                         .help(worktree.path.path)
+
+                    pathActions
 
                     if let tracking = trackingText {
                         Text(tracking)
@@ -193,6 +197,41 @@ struct WorktreeHeaderBar: View {
             Text(title)
                 .font(.headline)
                 .lineLimit(1)
+        }
+    }
+
+    /// Reveal-in-Finder and copy-path, sitting right next to the path so they are where
+    /// the user is already looking when they want the directory itself.
+    @ViewBuilder
+    private var pathActions: some View {
+        Button {
+            launcher.reveal(worktree.path)
+        } label: {
+            Image(systemName: "folder")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help("Show this worktree in Finder")
+
+        Button {
+            copyPath()
+        } label: {
+            Image(systemName: copiedPath ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(copiedPath ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help("Copy the worktree path to the clipboard")
+    }
+
+    private func copyPath() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(worktree.path.path, forType: .string)
+        copiedPath = true
+        // A brief checkmark confirms the copy, then the icon returns to normal.
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            copiedPath = false
         }
     }
 

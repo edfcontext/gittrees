@@ -95,6 +95,8 @@ struct MainView: View {
                     preselectedBranch: preselectedBranchForSheet,
                     movingChanges: movingChanges
                 )
+            case .worktreeAtCommit(let commit):
+                NewWorktreeSheet(preselectedBranch: nil, preselectedCommit: commit)
             case .newWorkspace:
                 NewWorkspaceSheet()
             case .removeWorktree(let removal):
@@ -219,7 +221,8 @@ struct MainView: View {
                 onRequestRemoval: { requestRemoval(of: $0) },
                 onRequestLock: { activeSheet = .lockWorktree($0) },
                 onAddRemote: { activeSheet = .addRemote },
-                onCreatePullRequest: { activeSheet = .createPullRequest }
+                onCreatePullRequest: { activeSheet = .createPullRequest },
+                onCreateWorktreeAtCommit: { activeSheet = .worktreeAtCommit($0) }
             )
         } else if case .branch(let ref) = selection,
                   let branch = service.branches.first(where: { $0.refName == ref }) {
@@ -298,7 +301,7 @@ struct MainView: View {
         if case .branch(let ref) = selection,
            let branch = service.branches.first(where: { $0.refName == ref }),
            service.worktree(for: branch) == nil {
-            return branch.name
+            return branch.refName
         }
         return nil
     }
@@ -368,6 +371,7 @@ struct MainView: View {
 /// so every modal goes through a single presenter rather than one modifier each.
 enum ActiveSheet: Identifiable {
     case newWorktree(movingChanges: Bool)
+    case worktreeAtCommit(CommitSummary)
     case newWorkspace
     case removeWorktree(WorktreeRemoval)
     case lockWorktree(Worktree)
@@ -380,6 +384,7 @@ enum ActiveSheet: Identifiable {
     var id: String {
         switch self {
         case .newWorktree(let movingChanges): "new-worktree-\(movingChanges)"
+        case .worktreeAtCommit(let commit): "worktree-at-\(commit.hash)"
         case .newWorkspace: "new-workspace"
         case .removeWorktree(let removal): "remove-\(removal.id)"
         case .lockWorktree(let worktree): "lock-\(worktree.id)"

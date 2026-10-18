@@ -110,7 +110,12 @@ public final class GitClient: Sendable {
         newBranch: String,
         startingAt startPoint: String?
     ) async throws {
-        var arguments = ["worktree", "add", "-b", newBranch, path.path]
+        var arguments = ["worktree", "add"]
+        // Explicit tracking must work even with branch.autoSetupMerge disabled.
+        if let startPoint, startPoint.hasPrefix(RefName.remotePrefix) {
+            arguments.append("--track")
+        }
+        arguments += ["-b", newBranch, path.path]
         if let startPoint, !startPoint.isEmpty {
             arguments.append(startPoint)
         }
@@ -205,6 +210,20 @@ public final class GitClient: Sendable {
     /// surfaced as a normal error rather than worked around.
     public func checkout(worktree: URL, branch: String) async throws {
         _ = try await run(["checkout", branch], in: worktree)
+    }
+
+    /// Creates a local branch that tracks a remote branch, then checks it out.
+    /// Passing a remote-tracking ref directly to `git checkout` would leave HEAD
+    /// detached, which is surprising for the app's "Checkout in Main Worktree" action.
+    public func checkoutTrackingBranch(
+        worktree: URL,
+        localBranch: String,
+        remoteRef: String
+    ) async throws {
+        _ = try await run(
+            ["checkout", "--track", "-b", localBranch, remoteRef],
+            in: worktree
+        )
     }
 
     /// Deletes a local branch. Git checks merge status unless force was explicitly

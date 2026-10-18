@@ -139,6 +139,10 @@ struct WorktreeContextMenu: View {
         }
         Button("Open Terminal Here") { open(in: .terminal) }
         Button("Reveal in Finder") { launcher.reveal(worktree.path) }
+        Button("Copy Path") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(worktree.path.path, forType: .string)
+        }
 
         if worktree.isMain, !worktree.isBare, !worktree.isMissingOnDisk {
             Divider()

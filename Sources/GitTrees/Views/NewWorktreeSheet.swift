@@ -1,12 +1,12 @@
 import GitTreesCore
 import SwiftUI
 
-/// Creates a worktree, either for a branch that already exists or for a new branch
-/// created in the same `git worktree add -b`.
+/// Creates a worktree for an existing branch, a new branch, or a commit from history.
 struct NewWorktreeSheet: View {
     enum Mode: String, CaseIterable, Identifiable {
         case existing = "Existing Branch"
         case new = "New Branch"
+        case commit = "Commit (Detached HEAD)"
 
         var id: String { rawValue }
     }
@@ -16,8 +16,10 @@ struct NewWorktreeSheet: View {
     @Environment(WorkspaceLauncher.self) private var launcher
     @Environment(\.dismiss) private var dismiss
 
-    /// Pre-selects the branch the user right-clicked in the sidebar.
+    /// Fully qualified ref of the branch the user selected in the sidebar.
     let preselectedBranch: String?
+    /// The exact commit selected in History, retained even when it has no branch or tag.
+    var preselectedCommit: CommitSummary? = nil
     /// Opens with the current worktree's uncommitted changes already set to move across,
     /// which is how "Move Changes to New Worktree…" enters the sheet.
     var movingChanges: Bool = false
@@ -47,7 +49,7 @@ struct NewWorktreeSheet: View {
 
             Form {
                 branchSection
-                if mode == .new { basedOnSection }
+                if mode != .existing { basedOnSection }
                 locationSection
                 if !service.status.isClean, service.selectedWorktree != nil { changesSection }
                 optionsSection
@@ -70,7 +72,7 @@ struct NewWorktreeSheet: View {
         ) { result in
             // The panel picks the parent; the branch directory is created inside it.
             guard case .success(let urls) = result, let parent = urls.first else { return }
-            let name = WorktreePathSuggester.directoryName(forBranch: chosenBranchName)
+            let name = WorktreePathSuggester.directoryName(forBranch: chosenCheckoutName)
             location = parent.appendingPathComponent(name, isDirectory: true).path
             locationEdited = true
         }
@@ -97,7 +99,7 @@ struct NewWorktreeSheet: View {
     private var branchSection: some View {
         Section("Branch") {
             Picker("", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
+                ForEach(availableModes) { mode in
                     Text(mode.rawValue).tag(mode)
                 }
             }
@@ -107,14 +109,20 @@ struct NewWorktreeSheet: View {
             switch mode {
             case .existing:
                 Picker("Branch", selection: $existingBranch) {
-                    ForEach(availableBranches, id: \.self) { name in
-                        Text(name).tag(name)
+                    ForEach(availableBranches) { branch in
+                        Text(branch.name).tag(branch.refName)
                     }
                 }
                 .disabled(availableBranches.isEmpty)
 
                 if availableBranches.isEmpty {
-                    Text("Every local branch already has a worktree.")
+                    Text("No branches are available for a new worktree.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let remote = selectedExistingBranch, remote.kind == .remote {
+                    Text("Creates local branch \(chosenCheckoutName), tracking \(remote.name).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -126,20 +134,42 @@ struct NewWorktreeSheet: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
+                if let remote = selectedRemoteStartPoint {
+                    Text("Creates a local branch tracking \(remote.name).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if let conflict = branchNameConflict, !isCreating {
                     Label(conflict, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
+            case .commit:
+                Text("Checks out this commit without creating a branch. Choose New Branch to continue development from it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
     private var basedOnSection: some View {
         Section("Based On") {
-            Picker("Start point", selection: $startPoint) {
-                ForEach(startPointOptions, id: \.self) { name in
-                    Text(name).tag(name)
+            if mode == .commit, let commit = preselectedCommit {
+                Text(commit.hash)
+                    .font(GitTreesUI.monospaced)
+                    .textSelection(.enabled)
+                Text(commit.subject)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("Start point", selection: $startPoint) {
+                    if let commit = preselectedCommit {
+                        Text("\(commit.abbreviatedHash) — \(commit.subject)").tag(commit.hash)
+                    }
+                    ForEach(startPointOptions, id: \.self) { name in
+                        Text(RefName.shortenLocal(name)).tag(name)
+                    }
                 }
             }
         }
@@ -245,18 +275,48 @@ struct NewWorktreeSheet: View {
 
     // MARK: - Derived state
 
-    /// Only branches without a worktree can be checked out into a new one; Git allows a
-    /// branch in exactly one worktree at a time.
-    private var availableBranches: [String] {
-        service.localBranches
+    private var availableModes: [Mode] {
+        preselectedCommit == nil ? [.existing, .new] : [.commit, .new]
+    }
+
+    /// Local branches must be free; remote branches create a local tracking checkout.
+    private var availableBranches: [Branch] {
+        let locals = service.localBranches
             .filter { service.worktree(for: $0) == nil }
-            .map(\.name)
+        let remotes = service.remoteBranches.filter {
+            preferences.showRemoteBranches || $0.refName == preselectedBranch
+        }
+        return locals + remotes
+    }
+
+    private var selectedExistingBranch: Branch? {
+        availableBranches.first { $0.refName == existingBranch }
+    }
+
+    /// The UI selects an existing remote branch even though Git needs to create a
+    /// local tracking branch for its checkout.
+    private var requestedMode: NewWorktreeRequest.Mode? {
+        if mode == .commit {
+            guard let commit = preselectedCommit else { return nil }
+            return .detachedCommit(commit.hash)
+        }
+        if mode == .existing {
+            guard let branch = selectedExistingBranch else { return nil }
+            return service.suggestedWorktreeMode(for: branch)
+        }
+        return .newBranch(
+            name: newBranchName.trimmingCharacters(in: .whitespaces), startPoint: startPoint
+        )
     }
 
     private var startPointOptions: [String] {
         let locals = service.localBranches.map(\.name)
-        let remotes = preferences.showRemoteBranches ? service.remoteBranches.map(\.name) : []
+        let remotes = preferences.showRemoteBranches ? service.remoteBranches.map(\.refName) : []
         return locals + remotes
+    }
+
+    private var selectedRemoteStartPoint: Branch? {
+        service.remoteBranches.first { $0.refName == startPoint }
     }
 
     /// The rule that would keep the worktree root out of `git status`, or nil when there
@@ -304,13 +364,21 @@ struct NewWorktreeSheet: View {
         guard let current = service.selectedWorktree?.branchName else {
             return "This worktree has a detached HEAD, so the changes may not apply cleanly to the branch you picked."
         }
-        let base = mode == .existing ? existingBranch : startPoint
+        let base = RefName.shortenLocal(
+            mode == .commit ? (preselectedCommit?.hash ?? "")
+                : mode == .existing ? existingBranch : startPoint
+        )
         guard base != current else { return nil }
         return "The new worktree starts at \(base) rather than \(current), so the changes may not apply cleanly. If they don't, they are left in a stash and nothing is lost."
     }
 
-    private var chosenBranchName: String {
-        mode == .existing ? existingBranch : newBranchName
+    private var chosenCheckoutName: String {
+        switch requestedMode {
+        case .existingBranch(let name): name
+        case .newBranch(let name, _): name
+        case .detachedCommit(let hash): "commit-\(hash.prefix(12))"
+        case nil: ""
+        }
     }
 
     private var branchNameConflict: String? {
@@ -332,11 +400,13 @@ struct NewWorktreeSheet: View {
         guard !location.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         switch mode {
         case .existing:
-            return !existingBranch.isEmpty
+            return selectedExistingBranch != nil
         case .new:
             return !newBranchName.trimmingCharacters(in: .whitespaces).isEmpty
                 && branchNameConflict == nil
                 && !startPoint.isEmpty
+        case .commit:
+            return preselectedCommit != nil
         }
     }
 
@@ -346,20 +416,26 @@ struct NewWorktreeSheet: View {
         openInEditor = preferences.openInEditorAfterCreate
         if movingChanges, !service.status.isClean { uncommittedChanges = .move }
 
-        if let preselectedBranch, service.branches.contains(where: { $0.name == preselectedBranch }) {
-            // A branch that exists but has no worktree is exactly the "existing branch"
-            // case, so start there rather than making the user switch.
-            if availableBranches.contains(preselectedBranch) {
+        existingBranch = availableBranches.first?.refName ?? ""
+        if let commit = preselectedCommit {
+            mode = .commit
+            startPoint = commit.hash
+        } else if let preselectedBranch,
+           let branch = service.branches.first(where: { $0.refName == preselectedBranch }) {
+            switch service.suggestedWorktreeMode(for: branch) {
+            case .existingBranch:
                 mode = .existing
-                existingBranch = preselectedBranch
-            } else {
-                mode = .new
-                newBranchName = ""
-                startPoint = preselectedBranch
+                existingBranch = branch.refName
+            case .newBranch(let name, let base):
+                mode = branch.kind == .remote ? .existing : .new
+                if branch.kind == .remote { existingBranch = branch.refName }
+                newBranchName = name
+                startPoint = base
+            case .detachedCommit:
+                break // Branch suggestions always describe an attached checkout.
             }
         } else {
             // New Branch is the common case; Existing Branch is one click away.
-            existingBranch = availableBranches.first ?? ""
             mode = .new
         }
 
@@ -382,7 +458,7 @@ struct NewWorktreeSheet: View {
 
     private func refreshSuggestedLocation() {
         guard !locationEdited, let repository = service.repository else { return }
-        let branch = chosenBranchName
+        let branch = chosenCheckoutName
         guard !branch.trimmingCharacters(in: .whitespaces).isEmpty else {
             suggestedLocation = ""
             location = ""
@@ -401,13 +477,9 @@ struct NewWorktreeSheet: View {
     }
 
     private func create() {
+        guard let requestedMode else { return }
         let request = NewWorktreeRequest(
-            mode: mode == .existing
-                ? .existingBranch(existingBranch)
-                : .newBranch(
-                    name: newBranchName.trimmingCharacters(in: .whitespaces),
-                    startPoint: startPoint
-                ),
+            mode: requestedMode,
             path: expandedLocation,
             openInEditor: openInEditor,
             uncommittedChanges: service.status.isClean ? .leave : uncommittedChanges,
@@ -415,16 +487,26 @@ struct NewWorktreeSheet: View {
         )
         preferences.openInEditorAfterCreate = openInEditor
 
+        // The id of the error showing before we start, so we can tell a failure raised by
+        // *this* creation apart from a stale one left on screen.
+        let priorErrorID = service.lastError?.id
+
         isCreating = true
         Task {
             let created = await service.createWorktree(request)
             isCreating = false
-            // A failure raises `service.lastError`, which MainView presents over the sheet;
-            // keep the sheet open only then. On success, dismiss before launching the editor
-            // so the dialog never lingers behind the editor's own startup.
-            guard let created else { return }
+
+            // Dismiss on success. Success is "the operation did not fail", not "we re-found
+            // the worktree by path" — the latter can miss on an unusual path even though Git
+            // created the worktree, and keying dismissal off it is what left the sheet open
+            // with a stale "directory already exists" warning. A real failure raises a new
+            // `service.lastError`, which MainView presents over the sheet.
+            let failed = service.lastError != nil && service.lastError?.id != priorErrorID
+            guard !failed else { return }
+
             dismiss()
-            if request.openInEditor {
+            // Best-effort: only when the worktree was located can we point the editor at it.
+            if request.openInEditor, let created {
                 try? await launcher.open(created.path, in: preferences.preferredEditor)
             }
         }

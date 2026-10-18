@@ -30,7 +30,18 @@ struct AddRemoteSheet: View {
             Divider()
 
             Form {
-                Section {
+                // Existing remotes come first: on a repository that already has them, the
+                // reason to open this sheet is usually to repoint one, not to add another.
+                // Burying that under the add form is what made editing hard to find.
+                if !service.remotes.isEmpty {
+                    Section("Existing Remotes") {
+                        ForEach(service.remotes) { remote in
+                            remoteRow(remote)
+                        }
+                    }
+                }
+
+                Section(service.remotes.isEmpty ? "" : "Add a Remote") {
                     LabelledFieldRow(label: "Name") {
                         TextField("", text: $name, prompt: Text("origin"))
                             .labelsHidden()
@@ -55,14 +66,6 @@ struct AddRemoteSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
-                if !service.remotes.isEmpty {
-                    Section("Existing Remotes") {
-                        ForEach(service.remotes) { remote in
-                            remoteRow(remote)
-                        }
-                    }
-                }
             }
             .formStyle(.grouped)
 
@@ -80,7 +83,7 @@ struct AddRemoteSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Add Remote")
+            Text(service.remotes.isEmpty ? "Add Remote" : "Remotes")
                 .font(.headline)
             if let repository = service.repository {
                 Text(RepositorySidebar.abbreviate(repository.mainWorktreePath))
@@ -116,44 +119,72 @@ struct AddRemoteSheet: View {
         .padding(.vertical, 12)
     }
 
-    /// One existing-remote row: its URL, read-only with an Edit button, or an editable
-    /// field with Save/Cancel while this is the row being edited.
+    /// One existing-remote row: its URL and an Edit button that opens a popover. The
+    /// popover carries its own always-visible Save/Cancel, so changing a URL never depends
+    /// on scrolling the sheet to find the save control.
     @ViewBuilder
     private func remoteRow(_ remote: Remote) -> some View {
-        if editingRemote == remote.name {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(remote.name)
-                    Spacer(minLength: 0)
-                }
-                TextField("", text: $editedURL, prompt: Text("git@github-ctx:owner/repo.git"))
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
+        LabeledContent(remote.name) {
+            HStack(spacing: 8) {
+                Text(remote.fetchURL ?? "No URL configured")
                     .font(GitTreesUI.monospaced)
-                    .focused($editedURLFocused)
-                    .onSubmit { saveEdit(remote) }
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    Button("Cancel") { cancelEdit() }
-                        .disabled(isUpdating)
-                    Button("Save") { saveEdit(remote) }
-                        .disabled(!canSaveEdit || isUpdating)
-                    if isUpdating { ProgressView().controlSize(.small) }
-                }
-            }
-        } else {
-            LabeledContent(remote.name) {
-                HStack(spacing: 8) {
-                    Text(remote.fetchURL ?? "No URL configured")
-                        .font(GitTreesUI.monospaced)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Button("Edit…") { beginEditing(remote) }
-                        .disabled(isAdding || isUpdating || editingRemote != nil)
-                }
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button("Edit…") { beginEditing(remote) }
+                    .disabled(isAdding)
+                    .popover(isPresented: editingBinding(for: remote), arrowEdge: .bottom) {
+                        editPopover(remote)
+                    }
             }
         }
+    }
+
+    /// The URL editor, shown in a popover anchored to the row's Edit button.
+    @ViewBuilder
+    private func editPopover(_ remote: Remote) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Remote URL — \(remote.name)")
+                .font(.headline)
+
+            TextField("", text: $editedURL, prompt: Text("git@github-ctx:owner/repo.git"))
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .font(GitTreesUI.monospaced)
+                .frame(width: 360)
+                .focused($editedURLFocused)
+                .onSubmit { saveEdit(remote) }
+
+            Text("Change the host or path Git uses for this remote — e.g. a plain git@github.com host to an SSH config alias like git@github-ctx so it authenticates as the right account.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 360, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if isUpdating { ProgressView().controlSize(.small) }
+                Button("Cancel") { cancelEdit() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isUpdating)
+                Button("Save") { saveEdit(remote) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSaveEdit || isUpdating)
+            }
+        }
+        .padding(14)
+    }
+
+    /// Drives the row popover from `editingRemote`: opening starts an edit, dismissing it
+    /// (Save, Cancel or click-away) clears the draft.
+    private func editingBinding(for remote: Remote) -> Binding<Bool> {
+        Binding(
+            get: { editingRemote == remote.name },
+            set: { isOpen in
+                if isOpen { beginEditing(remote) }
+                else if editingRemote == remote.name { cancelEdit() }
+            }
+        )
     }
 
     private var canSaveEdit: Bool {

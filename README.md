@@ -286,6 +286,11 @@ The repository name is not a level of its own: repositories sharing a parent sha
 The suggestion updates as you type and can be overridden; the root is configurable per
 repository on the Repository tab.
 
+Selecting a remote branch and choosing **Create Worktree…** fills in a local branch
+name and a path under that root. The new branch starts at the selected remote ref and
+tracks it. If the local name already exists, the sheet suggests a free name such as
+`main-worktree`, preserving the existing branch and its worktree.
+
 The New Worktree sheet also offers, checked by default, to add the root's directory name
 (`.worktrees/`) to `.git/info/exclude` — written only if the worktree is really created,
 and only when that line is not already in the file, so the checkbox disappears once it

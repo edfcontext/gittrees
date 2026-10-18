@@ -10,6 +10,8 @@ struct HistoryView: View {
     @Environment(RepositoryService.self) private var service
     @Environment(PreferencesService.self) private var preferences
 
+    let onCreateWorktreeAtCommit: (CommitSummary) -> Void
+
     @State private var selectedCommitID: CommitSummary.ID?
     @State private var detail: CommitDetail?
     @State private var selectedFileID: CommitFileChange.ID?
@@ -24,14 +26,6 @@ struct HistoryView: View {
             filterBar
             Divider()
             content
-        }
-        .contextMenu {
-            if let commit = selectedCommit {
-                Button("Copy Hash") { copy(commit.hash) }
-                Button("Copy Subject") { copy(commit.subject) }
-                Divider()
-            }
-            Button("Refresh") { service.refreshSelectedWorktree() }
         }
         .task(id: selectedCommitID) { await loadDetail() }
         .task(id: diffReloadKey) { await loadDiff() }
@@ -61,6 +55,12 @@ struct HistoryView: View {
             .help("Show only the commits on this branch since it diverged from the default branch (main/master). Off shows the full history behind the branch tip.")
 
             Spacer(minLength: 0)
+
+            Button("Create Worktree at Commit…") {
+                if let commit = selectedCommit { onCreateWorktreeAtCommit(commit) }
+            }
+            .disabled(selectedCommit == nil || service.activeOperation != nil)
+            .help("Check out the selected commit in a new worktree.")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -147,6 +147,17 @@ struct HistoryView: View {
         }
         .tableStyle(.inset)
         .font(.callout)
+        .contextMenu(forSelectionType: CommitSummary.ID.self) { ids in
+            if let id = ids.first, let commit = service.history.first(where: { $0.id == id }) {
+                Button("Create Worktree at Commit…") { onCreateWorktreeAtCommit(commit) }
+                    .disabled(service.activeOperation != nil)
+                Divider()
+                Button("Copy Hash") { copy(commit.hash) }
+                Button("Copy Subject") { copy(commit.subject) }
+                Divider()
+            }
+            Button("Refresh") { service.refreshSelectedWorktree() }
+        }
     }
 
     // MARK: - Loading

@@ -54,6 +54,8 @@ public struct NewWorktreeRequest: Sendable, Equatable {
         case existingBranch(String)
         /// Create a branch and its worktree in one `git worktree add -b`.
         case newBranch(name: String, startPoint: String)
+        /// Inspect a specific commit without creating or moving a branch.
+        case detachedCommit(String)
     }
 
     /// What happens to the uncommitted changes in the worktree the request was made from.
@@ -91,12 +93,19 @@ public struct NewWorktreeRequest: Sendable, Equatable {
         self.ignoreRule = ignoreRule
     }
 
-    /// The branch the new worktree will have checked out.
+    /// The branch the new worktree will have checked out, or empty for a detached checkout.
     public var branchName: String {
         switch mode {
         case .existingBranch(let name): name
         case .newBranch(let name, _): name
+        case .detachedCommit: ""
         }
+    }
+
+    /// A name for path suggestions and transfer messages, including detached checkouts.
+    public var checkoutName: String {
+        if case .detachedCommit(let hash) = mode { return "commit-\(hash.prefix(12))" }
+        return branchName
     }
 }
 
@@ -804,6 +813,37 @@ public final class RepositoryService {
 
     // MARK: - Worktree lifecycle
 
+    /// Defaults for creating a worktree from a selected branch. Remote branches need
+    /// a local tracking branch; never reuse a local name that may point elsewhere.
+    public func suggestedWorktreeMode(for branch: Branch) -> NewWorktreeRequest.Mode {
+        guard branch.kind == .remote,
+              let localName = Self.localName(forRemoteBranch: branch.refName) else {
+            return worktree(for: branch) == nil
+                ? .existingBranch(branch.name)
+                : .newBranch(name: "", startPoint: branch.name)
+        }
+
+        let names = localBranches.map(\.name)
+        func conflicts(_ candidate: String) -> Bool {
+            names.contains {
+                $0 == candidate || $0.hasPrefix(candidate + "/") || candidate.hasPrefix($0 + "/")
+            }
+        }
+        var name = localName
+        if conflicts(name) {
+            // Flatten only when an existing parent ref prevents a nested branch.
+            let base = names.contains(where: { localName.hasPrefix($0 + "/") })
+                ? localName.replacingOccurrences(of: "/", with: "-") : localName
+            name = base + "-worktree"
+            var suffix = 2
+            while conflicts(name) {
+                name = base + "-worktree-\(suffix)"
+                suffix += 1
+            }
+        }
+        return .newBranch(name: name, startPoint: branch.refName)
+    }
+
     public func createWorktree(_ request: NewWorktreeRequest) async -> Worktree? {
         guard repository != nil else { return nil }
         let created = await addWorktree(request)
@@ -846,9 +886,15 @@ public final class RepositoryService {
     /// created — and the caller, reading that nil as failure, would leave its dialog open
     /// with a stale "already exists" warning. Resolving both sides makes the match hold.
     private func worktree(at path: URL) -> Worktree? {
-        let target = path.resolvingSymlinksInPath()
-        return worktrees.first { $0.path.resolvingSymlinksInPath() == target }
-            ?? worktrees.first { $0.path == path.standardizedFileURL }
+        // Compare as normalized path strings, not URL equality: `==` on file URLs also
+        // weighs the trailing-slash/`isDirectory` hint and any base URL, so two URLs for
+        // the very same directory can compare unequal. `.path` after resolving symlinks and
+        // standardizing collapses all of that to one canonical string.
+        func key(_ url: URL) -> String {
+            url.resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        let target = key(path)
+        return worktrees.first { key($0.path) == target }
     }
 
     /// Creates the worktree and carries `source`'s uncommitted work into it.
@@ -885,7 +931,7 @@ public final class RepositoryService {
 
             guard let stash = try await client.stashPush(
                 worktree: source.path,
-                message: "GitTrees: \(request.branchName)"
+                message: "GitTrees: \(request.checkoutName)"
             ) else {
                 throw GitError.noLocalChanges(path: source.path.path)
             }
@@ -974,6 +1020,12 @@ public final class RepositoryService {
                 path: request.path,
                 newBranch: name,
                 startingAt: startPoint
+            )
+        case .detachedCommit(let hash):
+            try await client.createDetachedWorktree(
+                repository: repository.commandDirectory,
+                path: request.path,
+                at: hash
             )
         }
     }
@@ -1116,8 +1168,27 @@ public final class RepositoryService {
         guard claim(worktree) else { return }
         defer { release(worktree) }
 
+        let trackingLocalName = branch.kind == .remote
+            ? Self.localName(forRemoteBranch: branch.refName)
+            : nil
+        let existingLocalBranch = trackingLocalName.flatMap { name in
+            localBranches.first(where: { $0.name == name })
+        }
+
         _ = await withOperation(label: "Checking out \(branch.name)…", worktree: worktree) { [client] in
-            try await client.checkout(worktree: worktree.path, branch: branch.name)
+            if let trackingLocalName {
+                if let existingLocalBranch {
+                    try await client.checkout(worktree: worktree.path, branch: existingLocalBranch.name)
+                } else {
+                    try await client.checkoutTrackingBranch(
+                        worktree: worktree.path,
+                        localBranch: trackingLocalName,
+                        remoteRef: branch.refName
+                    )
+                }
+            } else {
+                try await client.checkout(worktree: worktree.path, branch: branch.name)
+            }
         } onFailure: { error in
             PresentableError(title: "Could Not Check Out Branch", error: error)
         } thenReturning: { [weak self] in
@@ -1127,6 +1198,16 @@ public final class RepositoryService {
             self?.selectedWorktreePath = worktree.id
             self?.refreshSelectedWorktree()
         }
+    }
+
+    /// `refs/remotes/origin/feature/x` maps to the conventional local name
+    /// `feature/x`. A malformed or non-remote ref returns nil and keeps the existing
+    /// checkout path as a fallback.
+    private nonisolated static func localName(forRemoteBranch refName: String) -> String? {
+        guard refName.hasPrefix(RefName.remotePrefix) else { return nil }
+        let components = refName.dropFirst(RefName.remotePrefix.count).split(separator: "/")
+        guard components.count >= 2 else { return nil }
+        return components.dropFirst().joined(separator: "/")
     }
 
     // MARK: - Staging
