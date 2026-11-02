@@ -61,6 +61,8 @@ public enum GitError: Error, LocalizedError, Sendable {
     case notARepository(path: String)
     /// Creating a new workspace folder failed before Git ran.
     case couldNotCreateDirectory(path: String, reason: String)
+    /// A proposed branch or tag name is not a valid Git reference name.
+    case invalidReferenceName(name: String)
     /// Git's machine-readable output did not match the documented format.
     case unexpectedOutput(reason: String, arguments: [String])
     /// A destructive operation was already running against the same worktree.
@@ -83,6 +85,8 @@ public enum GitError: Error, LocalizedError, Sendable {
             return "\(path) is not inside a Git repository."
         case .couldNotCreateDirectory(let path, let reason):
             return "Could not create \(path): \(reason)"
+        case .invalidReferenceName(let name):
+            return "“\(name)” is not a valid branch or tag name."
         case .unexpectedOutput(let reason, _):
             return "Unexpected output from git: \(reason)"
         case .operationInProgress(let path):

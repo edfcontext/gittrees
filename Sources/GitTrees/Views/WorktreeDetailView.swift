@@ -24,6 +24,8 @@ struct WorktreeDetailView: View {
     let onAddRemote: () -> Void
     let onCreatePullRequest: () -> Void
     let onCreateWorktreeAtCommit: (CommitSummary) -> Void
+    let onCreateReferenceAtCommit: (CreateCommitReferenceSheet.Kind, CommitSummary) -> Void
+    let onShowStashRecoveryDetails: (PresentableError) -> Void
 
     @State private var tab: Tab = .changes
 
@@ -50,6 +52,9 @@ struct WorktreeDetailView: View {
                 .fixedSize()
 
                 Spacer(minLength: 0)
+                if let recovery = service.stashRecovery {
+                    stashRecoveryMenu(recovery)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -78,10 +83,46 @@ struct WorktreeDetailView: View {
     /// The tab's name, with a stash count so the user can see stashes exist without
     /// opening the tab.
     private func label(for tab: Tab) -> String {
+        if tab == .changes, !service.status.conflicts.isEmpty {
+            let count = service.status.conflicts.count
+            return "Changes (\(count) conflict\(count == 1 ? "" : "s"))"
+        }
         if tab == .stashes, !service.stashes.isEmpty {
             return "Stashes (\(service.stashes.count))"
         }
         return tab.rawValue
+    }
+
+    private func stashRecoveryMenu(_ recovery: StashRecoveryNotice) -> some View {
+        Menu {
+            Text(recovery.error.title)
+            Text("Saved stash \(recovery.stashCommit.prefix(7)) is kept")
+            Divider()
+            Button("Review Changes") { reviewStashChanges() }
+            Button("View Saved Stash") {
+                service.selectedStashID = recovery.stashCommit
+                tab = .stashes
+            }
+            .disabled(!service.stashes.contains { $0.commit == recovery.stashCommit })
+            Button("Details…") { onShowStashRecoveryDetails(recovery.error) }
+            Divider()
+            Button("Dismiss Recovery Notice") { service.dismissStashRecovery() }
+        } label: {
+            Label("Stash recovery needed", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .controlSize(.small)
+        .help(recovery.error.message)
+    }
+
+    private func reviewStashChanges() {
+        tab = .changes
+        if let conflict = service.status.conflicts.first {
+            service.selectedFileKeys = [WorktreeStatus.selectionKey(path: conflict.path, staged: false)]
+            service.focusSelectedFile(resettingSide: true)
+        }
     }
 
     @ViewBuilder
@@ -93,7 +134,8 @@ struct WorktreeDetailView: View {
             case .changes:
                 ChangesView()
             case .history:
-                HistoryView(onCreateWorktreeAtCommit: onCreateWorktreeAtCommit)
+                HistoryView(onCreateWorktreeAtCommit: onCreateWorktreeAtCommit,
+                            onCreateReferenceAtCommit: onCreateReferenceAtCommit)
             case .stashes:
                 StashView()
             case .branchInfo:
@@ -237,7 +279,10 @@ struct WorktreeHeaderBar: View {
 
     @ViewBuilder
     private var stateBadge: some View {
-        if service.status.isClean {
+        if !service.status.conflicts.isEmpty {
+            let count = service.status.conflicts.count
+            BadgeLabel(text: "\(count) conflict\(count == 1 ? "" : "s")", tint: .red)
+        } else if service.status.isClean {
             BadgeLabel(text: "clean", tint: .green)
         } else {
             let count = service.status.changes.count

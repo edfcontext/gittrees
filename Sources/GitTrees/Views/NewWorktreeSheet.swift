@@ -385,7 +385,7 @@ struct NewWorktreeSheet: View {
         let trimmed = newBranchName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         guard service.branches.contains(where: { $0.kind == .local && $0.name == trimmed }) else { return nil }
-        return "A branch named \(trimmed) already exists. Use Existing Branch instead."
+        return "A branch named \(trimmed) already exists. Choose a different name."
     }
 
     private var locationExists: Bool {

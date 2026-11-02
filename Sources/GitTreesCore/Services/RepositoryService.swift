@@ -160,6 +160,17 @@ public final class RepositoryService {
     public private(set) var stashes: [Stash] = []
     /// The stash whose diff the Stashes panel is showing, addressed by commit.
     public var selectedStashID: Stash.ID?
+    private var stashRecoveryNotices: [String: StashRecoveryNotice] = [:]
+
+    /// Recovery for the selected worktree, independent of the dismissible error alert.
+    public var stashRecovery: StashRecoveryNotice? {
+        selectedWorktreePath.flatMap { stashRecoveryNotices[$0] }
+    }
+
+    public func dismissStashRecovery() {
+        guard let selectedWorktreePath else { return }
+        stashRecoveryNotices.removeValue(forKey: selectedWorktreePath)
+    }
 
     /// Path of the selected worktree. Paths, not indices, so a refresh cannot
     /// silently move the selection to a different worktree.
@@ -434,6 +445,7 @@ public final class RepositoryService {
         remotes = []
         stashes = []
         selectedStashID = nil
+        stashRecoveryNotices = [:]
         identity = .unknown
         gitHubAuth = .unknown
         pullRequest = nil
@@ -533,7 +545,13 @@ public final class RepositoryService {
             branches = loadedBranches
             remotes = loadedRemotes
             // Best-effort: a stash-list failure must not fail the whole reload.
-            stashes = (try? await client.stashes(repository: repository.commandDirectory)) ?? []
+            if let loadedStashes = try? await client.stashes(repository: repository.commandDirectory) {
+                stashes = loadedStashes
+                let retainedCommits = Set(loadedStashes.map(\.commit))
+                stashRecoveryNotices = stashRecoveryNotices.filter { retainedCommits.contains($0.value.stashCommit) }
+            } else {
+                stashes = []
+            }
             if let selectedStashID, !stashes.contains(where: { $0.id == selectedStashID }) {
                 self.selectedStashID = nil
             }
@@ -1156,6 +1174,37 @@ public final class RepositoryService {
             PresentableError(title: "Could Not Delete Branch", error: error)
         } thenReturning: { [weak self] in
             await self?.reload()
+            return true
+        } ?? false
+    }
+
+    /// Creates a branch at a historical commit while preserving every checkout.
+    @discardableResult
+    public func createBranch(name: String, at commit: CommitSummary) async -> Bool {
+        guard let repository, activeOperation == nil else { return false }
+        return await withOperation(label: "Creating branch…") { [client] in
+            try await client.createBranch(repository: repository.commandDirectory, name: name, at: commit.hash)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Create Branch", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
+            return true
+        } ?? false
+    }
+
+    /// Creates a local tag at a historical commit and refreshes its history badge.
+    @discardableResult
+    public func createTag(name: String, at commit: CommitSummary, message: String = "") async -> Bool {
+        guard let repository, activeOperation == nil else { return false }
+        return await withOperation(label: "Creating tag…") { [client] in
+            try await client.createTag(repository: repository.commandDirectory, name: name,
+                                       at: commit.hash, message: message)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Create Tag", error: error)
+        } thenReturning: { [weak self] in
+            await self?.reload()
+            self?.refreshSelectedWorktree()
             return true
         } ?? false
     }
@@ -1786,8 +1835,8 @@ public final class RepositoryService {
     private enum StashPullOutcome: Sendable {
         /// Pulled and re-applied cleanly, or there was nothing to stash.
         case clean(output: String)
-        /// Pulled, but re-applying the stash conflicted. The stash is preserved.
-        case conflicted(output: String, files: [String], stash: String)
+        /// Work remains in the stash, possibly alongside partially restored files.
+        case recovery(output: String, stash: String, error: PresentableError)
     }
 
     /// Stashes local changes, pulls, and re-applies the stash — the manual dance people
@@ -1843,60 +1892,112 @@ public final class RepositoryService {
             do {
                 output = try await pull()
             } catch {
+                let pullError = error
                 // The pull failed. If it left the tree untouched, put the changes straight
                 // back; if it conflicted or half-applied, don't compound it — keep the
                 // stash and name it. Either way nothing is lost.
-                if try await client.statusSummary(worktree: path).isClean {
-                    try await client.stashApply(worktree: path, stash: stash, restoringIndex: false)
-                    try await Self.dropStash(stash, in: path, using: client)
-                    throw error
+                if (try? await client.statusSummary(worktree: path).isClean) == true {
+                    do {
+                        try await client.stashApply(worktree: path, stash: stash, restoringIndex: false)
+                    } catch {
+                        let issue = Self.stashRecoveryError(
+                            title: "Pull Failed — Stash Restore Incomplete",
+                            reason: "The pull failed and Git could not fully put your local changes back.",
+                            stash: stash, error: error
+                        )
+                        return .recovery(output: Self.diagnosticOutput(pullError), stash: stash, error: issue)
+                    }
+                    do {
+                        try await Self.dropStash(stash, in: path, using: client)
+                    } catch {
+                        let issue = Self.stashRecoveryError(
+                            title: "Pull Failed — Changes Restored",
+                            reason: "The pull failed. Your local changes were restored, but Git could not remove the saved stash. Do not apply it again.",
+                            stash: stash, error: error
+                        )
+                        return .recovery(output: Self.diagnosticOutput(pullError), stash: stash, error: issue)
+                    }
+                    throw pullError
                 }
-                throw GitError.changesLeftInStash(
-                    stash: stash,
-                    reason: "The pull could not be completed, so your changes were not re-applied."
+                let issue = Self.stashRecoveryError(
+                    title: "Pull Failed — Changes Kept in Stash",
+                    reason: "The pull could not be completed, so your stashed changes were not re-applied. Resolve the pull conflicts before recovering the stash.",
+                    stash: stash, error: pullError
                 )
+                return .recovery(output: "", stash: stash, error: issue)
             }
 
             do {
                 try await client.stashApply(worktree: path, stash: stash, restoringIndex: false)
             } catch {
-                // A re-apply conflict leaves the working tree with markers and keeps the
-                // stash. That is the outcome to report, not an error: the pull succeeded
-                // and the work is back, it just needs resolving.
-                let conflicts = try await client.statusSummary(worktree: path).conflicts.map(\.path)
-                guard !conflicts.isEmpty else {
-                    throw GitError.changesLeftInStash(
-                        stash: stash,
-                        reason: "The changes could not be re-applied after the pull."
-                    )
-                }
-                return .conflicted(output: output, files: conflicts, stash: stash)
+                // Untracked-file collisions may leave no unmerged index entries at all,
+                // or occur alongside a text conflict. Keep all of Git's diagnostics.
+                let conflicts = (try? await client.statusSummary(worktree: path).conflicts.map(\.path)) ?? []
+                let issue = Self.stashRecoveryError(
+                    title: conflicts.isEmpty ? "Stash Re-apply Incomplete" : "Re-applied With Conflicts",
+                    reason: "The pull succeeded, but Git could not fully restore your stashed changes. Some files may still be only in the stash.",
+                    stash: stash, error: error, conflicts: conflicts
+                )
+                return .recovery(output: output, stash: stash, error: issue)
             }
 
-            try await Self.dropStash(stash, in: path, using: client)
+            do {
+                try await Self.dropStash(stash, in: path, using: client)
+            } catch {
+                let issue = Self.stashRecoveryError(
+                    title: "Changes Restored — Stash Kept",
+                    reason: "The pull succeeded and your changes were restored, but Git could not remove the saved stash. Do not apply it again.",
+                    stash: stash, error: error
+                )
+                return .recovery(output: output, stash: stash, error: issue)
+            }
             return .clean(output: output)
         } onFailure: { error in
             PresentableError(title: "Stash & Apply Failed", error: error)
-        } thenReturning: { [weak self] (outcome: StashPullOutcome) -> StashPullOutcome in
-            await self?.reload()
-            self?.refreshSelectedWorktree()
-            return outcome
-        }
+        } thenReturning: { (outcome: StashPullOutcome) in outcome }
+
+        // A failed pull or partial apply has already changed Git state. Refresh even
+        // when the operation threw, and finish loading conflicts before notifying UI.
+        await reload(presentError: false)
+        refreshSelectedWorktree()
+        await statusTask?.value
 
         switch outcome {
         case .clean(let output):
             lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        case .conflicted(let output, let files, let stash):
-            lastOperationOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            let list = files.map { "• \($0)" }.joined(separator: "\n")
-            lastError = PresentableError(
-                title: "Re-applied With Conflicts",
-                message: "The pull succeeded and your changes were re-applied, but \(files.count == 1 ? "one file" : "\(files.count) files") now \(files.count == 1 ? "has" : "have") conflict markers to resolve:\n\n\(list)",
-                detail: "Your changes are also safe in stash \(String(stash.prefix(7))). After resolving the conflicts, run git stash drop to discard it."
-            )
+        case .recovery(let output, let stash, let error):
+            showStashRecovery(stash: stash, worktree: worktree, error: error, output: output)
         case .none:
             break // A hard failure already set lastError.
         }
+    }
+
+    private nonisolated static func diagnosticOutput(_ error: Error) -> String {
+        let diagnostic = PresentableError(title: "", error: error)
+        return [diagnostic.message, diagnostic.detail].compactMap { $0 }.joined(separator: "\n\n")
+    }
+
+    private nonisolated static func stashRecoveryError(
+        title: String, reason: String, stash: String, error: Error, conflicts: [String] = []
+    ) -> PresentableError {
+        let files = conflicts.isEmpty ? "" : "\n\nUnresolved conflicts:\n" + conflicts.map { "• \($0)" }.joined(separator: "\n")
+        return PresentableError(
+            title: title,
+            message: "\(reason)\(files)\n\nThe original changes are kept in stash \(stash.prefix(7)). Review Changes and the saved stash before applying anything again.",
+            detail: diagnosticOutput(error)
+        )
+    }
+
+    private func showStashRecovery(stash: String, worktree: Worktree, error: PresentableError, output: String = "") {
+        var diagnostic = error
+        if !output.isEmpty {
+            diagnostic.detail = [output, error.detail].compactMap { $0 }.joined(separator: "\n\n")
+        }
+        stashRecoveryNotices[worktree.id] = StashRecoveryNotice(stashCommit: stash, error: diagnostic)
+        // The persistent notice and its scrollable Details carry the failure output.
+        // Do not duplicate a full command transcript in the compact operation bar.
+        lastOperationOutput = nil
+        lastError = diagnostic
     }
 
     // MARK: - Stash panel
@@ -1979,32 +2080,35 @@ public final class RepositoryService {
         }
         defer { release(worktree) }
 
-        enum ApplyOutcome: Sendable { case clean, conflicted([String]) }
+        enum ApplyOutcome: Sendable { case clean, recovery(PresentableError) }
 
         let outcome = await withOperation(label: "Applying stash…", worktree: worktree) { [client] () -> ApplyOutcome in
             do {
                 try await client.stashApply(worktree: worktree.path, stash: stash.commit, restoringIndex: false)
                 return .clean
             } catch {
-                let conflicts = try await client.statusSummary(worktree: worktree.path).conflicts.map(\.path)
-                guard !conflicts.isEmpty else { throw error }
-                return .conflicted(conflicts)
+                // A stale stash row can point at an entry deleted by another Git client.
+                // Only promise recovery through the stack after verifying it is there.
+                guard (try? await client.stashSelector(repository: worktree.path, forCommit: stash.commit)) != nil else {
+                    throw error
+                }
+                let conflicts = (try? await client.statusSummary(worktree: worktree.path).conflicts.map(\.path)) ?? []
+                return .recovery(Self.stashRecoveryError(
+                    title: conflicts.isEmpty ? "Could Not Fully Apply Stash" : "Applied With Conflicts",
+                    reason: "Git could not fully apply the stash. Some files may still be only in the stash.",
+                    stash: stash.commit, error: error, conflicts: conflicts
+                ))
             }
         } onFailure: { error in
             PresentableError(title: "Could Not Apply Stash", error: error)
-        } thenReturning: { [weak self] (outcome: ApplyOutcome) -> ApplyOutcome in
-            await self?.reload()
-            self?.refreshSelectedWorktree()
-            return outcome
-        }
+        } thenReturning: { (outcome: ApplyOutcome) in outcome }
 
-        if case .conflicted(let files) = outcome {
-            let list = files.map { "• \($0)" }.joined(separator: "\n")
-            lastError = PresentableError(
-                title: "Applied With Conflicts",
-                message: "The stash was applied, but \(files.count == 1 ? "one file" : "\(files.count) files") now \(files.count == 1 ? "has" : "have") conflict markers to resolve:\n\n\(list)",
-                detail: "The stash is kept so you can recover the original. After resolving, drop it from the Stashes panel."
-            )
+        await reload(presentError: false)
+        refreshSelectedWorktree()
+        await statusTask?.value
+
+        if case .recovery(let error) = outcome {
+            showStashRecovery(stash: stash.commit, worktree: worktree, error: error)
         }
     }
 

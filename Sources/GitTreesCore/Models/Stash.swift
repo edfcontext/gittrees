@@ -41,3 +41,15 @@ public struct Stash: Identifiable, Hashable, Sendable {
     /// Short sha for display.
     public var shortCommit: String { String(commit.prefix(7)) }
 }
+
+/// An incomplete stash operation stays visible after its alert is dismissed.
+/// Bound to the affected worktree and the original stash's stable commit hash.
+public struct StashRecoveryNotice: Sendable {
+    public let stashCommit: String
+    public let error: PresentableError
+
+    public init(stashCommit: String, error: PresentableError) {
+        self.stashCommit = stashCommit
+        self.error = error
+    }
+}

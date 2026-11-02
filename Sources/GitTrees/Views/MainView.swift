@@ -97,6 +97,10 @@ struct MainView: View {
                 )
             case .worktreeAtCommit(let commit):
                 NewWorktreeSheet(preselectedBranch: nil, preselectedCommit: commit)
+            case .referenceAtCommit(let kind, let commit):
+                CreateCommitReferenceSheet(kind: kind, commit: commit)
+            case .stashRecoveryDetails(let error):
+                StashRecoveryDetailsSheet(error: error)
             case .newWorkspace:
                 NewWorkspaceSheet()
             case .removeWorktree(let removal):
@@ -222,7 +226,9 @@ struct MainView: View {
                 onRequestLock: { activeSheet = .lockWorktree($0) },
                 onAddRemote: { activeSheet = .addRemote },
                 onCreatePullRequest: { activeSheet = .createPullRequest },
-                onCreateWorktreeAtCommit: { activeSheet = .worktreeAtCommit($0) }
+                onCreateWorktreeAtCommit: { activeSheet = .worktreeAtCommit($0) },
+                onCreateReferenceAtCommit: { activeSheet = .referenceAtCommit($0, $1) },
+                onShowStashRecoveryDetails: { activeSheet = .stashRecoveryDetails($0) }
             )
         } else if case .branch(let ref) = selection,
                   let branch = service.branches.first(where: { $0.refName == ref }) {
@@ -360,6 +366,9 @@ struct MainView: View {
     }
 
     private func errorBody(_ error: PresentableError) -> String {
+        // Stash diagnostics can include a full status listing. Keep the alert readable;
+        // the recovery notice retains the complete, scrollable Details view.
+        if service.stashRecovery?.error.id == error.id { return error.message }
         guard let detail = error.detail, !detail.isEmpty else { return error.message }
         return "\(error.message)\n\n\(detail)"
     }
@@ -372,6 +381,8 @@ struct MainView: View {
 enum ActiveSheet: Identifiable {
     case newWorktree(movingChanges: Bool)
     case worktreeAtCommit(CommitSummary)
+    case referenceAtCommit(CreateCommitReferenceSheet.Kind, CommitSummary)
+    case stashRecoveryDetails(PresentableError)
     case newWorkspace
     case removeWorktree(WorktreeRemoval)
     case lockWorktree(Worktree)
@@ -385,6 +396,8 @@ enum ActiveSheet: Identifiable {
         switch self {
         case .newWorktree(let movingChanges): "new-worktree-\(movingChanges)"
         case .worktreeAtCommit(let commit): "worktree-at-\(commit.hash)"
+        case .referenceAtCommit(let kind, let commit): "\(kind.rawValue)-at-\(commit.hash)"
+        case .stashRecoveryDetails(let error): "stash-recovery-\(error.id)"
         case .newWorkspace: "new-workspace"
         case .removeWorktree(let removal): "remove-\(removal.id)"
         case .lockWorktree(let worktree): "lock-\(worktree.id)"

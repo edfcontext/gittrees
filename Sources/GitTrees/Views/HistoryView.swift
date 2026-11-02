@@ -11,6 +11,7 @@ struct HistoryView: View {
     @Environment(PreferencesService.self) private var preferences
 
     let onCreateWorktreeAtCommit: (CommitSummary) -> Void
+    let onCreateReferenceAtCommit: (CreateCommitReferenceSheet.Kind, CommitSummary) -> Void
 
     @State private var selectedCommitID: CommitSummary.ID?
     @State private var detail: CommitDetail?
@@ -149,6 +150,10 @@ struct HistoryView: View {
         .font(.callout)
         .contextMenu(forSelectionType: CommitSummary.ID.self) { ids in
             if let id = ids.first, let commit = service.history.first(where: { $0.id == id }) {
+                Button("Create Branch from This Commit…") { onCreateReferenceAtCommit(.branch, commit) }
+                    .disabled(service.activeOperation != nil)
+                Button("Create Tag from This Commit…") { onCreateReferenceAtCommit(.tag, commit) }
+                    .disabled(service.activeOperation != nil)
                 Button("Create Worktree at Commit…") { onCreateWorktreeAtCommit(commit) }
                     .disabled(service.activeOperation != nil)
                 Divider()

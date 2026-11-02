@@ -232,6 +232,45 @@ public final class GitClient: Sendable {
         _ = try await run(["branch", force ? "-D" : "-d", "--", name], in: repository)
     }
 
+    /// Creates a local branch at the selected commit, without checking it out or
+    /// creating a worktree. Existing branches are never moved.
+    public func createBranch(repository: URL, name: String, at commit: String) async throws {
+        try await validateReferenceName(name, prefix: RefName.localPrefix, in: repository)
+        let hash = try await referenceCommit(commit, in: repository)
+        _ = try await run(["branch", "--no-track", "--", name, hash], in: repository)
+    }
+
+    /// Creates a local tag. A message makes it annotated; otherwise it is lightweight.
+    /// No force, signing prompt, checkout or push is involved.
+    public func createTag(repository: URL, name: String, at commit: String, message: String = "") async throws {
+        try await validateReferenceName(name, prefix: RefName.tagPrefix, in: repository)
+        let hash = try await referenceCommit(commit, in: repository)
+        var arguments = ["tag", "--no-sign"]
+        if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments += ["--annotate", "--message", message]
+        }
+        arguments += ["--", name, hash]
+        _ = try await run(arguments, in: repository)
+    }
+
+    private func validateReferenceName(_ name: String, prefix: String, in repository: URL) async throws {
+        // Validate the full ref rather than using --branch, which can expand @{-1}
+        // into the previously checked-out branch instead of validating the input.
+        guard !name.isEmpty, !name.hasPrefix("-") else {
+            throw GitError.invalidReferenceName(name: name)
+        }
+        let result = try await run(
+            ["check-ref-format", prefix + name], in: repository, acceptableExitCodes: [0, 1]
+        )
+        guard result.exitCode == 0 else { throw GitError.invalidReferenceName(name: name) }
+    }
+
+    private func referenceCommit(_ commit: String, in repository: URL) async throws -> String {
+        try await run(
+            ["rev-parse", "--verify", "--end-of-options", "\(commit)^{commit}"], in: repository
+        ).trimmedStdout
+    }
+
     // MARK: - Identity
 
     /// Reads both the resolved and the repository-local commit identity.

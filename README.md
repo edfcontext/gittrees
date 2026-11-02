@@ -120,6 +120,16 @@ behave exactly as they do on the command line.
   any worktree are protected, and remote branches are kept.
 - **History** — a flat commit list for the selected worktree. Selecting a commit shows
   its message, the files it changed, and a unified diff of the selected file (`git show`).
+  Select a commit and choose **Create Worktree at Commit…** (also in its right-click
+  menu) to check out that exact version in a new worktree. Choose **Commit (Detached
+  HEAD)** to inspect it without a branch, or **New Branch** to develop from that commit.
+  The location uses your configured worktree root; uncommitted changes stay in their
+  current worktree unless you explicitly choose to move or copy them.
+  Right-click a commit and choose **Create Branch from This Commit…** to create a
+  local branch without checking it out or creating a worktree, or **Create Tag from
+  This Commit…** to create a local tag. An optional tag message creates an annotated
+  tag; leaving it blank creates a lightweight tag. Both use the selected commit's
+  exact hash and refuse to overwrite an existing name. Neither action pushes to a remote.
 - **Merge / Rebase** — choose another local or remote-tracking branch and review the
   direction before starting: *Merge source into current* or *Rebase current onto base*.
   Rebase requires a clean worktree and explains that replayed commits get new IDs.
@@ -150,6 +160,12 @@ behave exactly as they do on the command line.
 - **Remotes** — add a remote, and fetch, pull and push against a chosen one, with
   `--set-upstream` offered for a branch that has never been pushed. Git's stdout and
   stderr are shown verbatim.
+- **Stash recovery** — Apply and **Stash, Pull & Re-apply** keep the original stash
+  whenever restoration is incomplete, including untracked-file collisions and pull
+  conflicts. Status and the stash list refresh on failure. An alert and a recovery
+  notice identify the saved stash, with **Review Changes**, **View Saved Stash** and
+  **Details…** actions. Git's diagnostics include paths that could not be restored,
+  even when other files applied successfully. Dismissing the notice keeps the stash.
 - **Commit identity** — shows who a commit would be authored as and where that came
   from, and can pin an identity on the repository. See below.
 - **Pull requests** — open a pull request for the selected worktree's branch through the
@@ -332,9 +348,8 @@ where gh's own interactive flow belongs; GitTrees never runs interactive gh comm
 GitLab integration, issue tracking, PR review and merge (only *creating* a pull request
 is supported, via the GitHub CLI), interactive rebase, merge editor,
 hunk or line staging, submodules, LFS, SSH keys, credential UI, cloning, signing
-configuration, bisect, reflog, blame, tags, and commit-graph rendering. There is no stash
-*interface* either — no list, no manual push and pop; the stash is used internally, as
-the transport that moves uncommitted changes into a new worktree. The
+configuration, bisect, reflog, blame, tag deletion/pushing, and commit-graph rendering.
+Stashes support creating, listing, applying and deleting; there is no separate Pop action. The
 architecture leaves room for these; the scope deliberately does not include them.
 
 ## Building

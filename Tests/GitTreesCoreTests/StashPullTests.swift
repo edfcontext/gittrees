@@ -60,7 +60,7 @@ struct StashPullTests {
         }
 
         /// Pushes a remote edit to `file.txt`'s third line, so `work` falls one behind.
-        func pushRemoteChange(line3: String) async throws {
+        func pushRemoteChange(line3: String, addingFile: (path: String, contents: String)? = nil) async throws {
             let other = root.appendingPathComponent("other-\(UUID().uuidString)", isDirectory: true)
             try await git(["clone", "--quiet", remote.path, other.path], in: root)
             try await configure(other)
@@ -69,6 +69,11 @@ struct StashPullTests {
                 atomically: true,
                 encoding: .utf8
             )
+            if let addingFile {
+                try addingFile.contents.write(to: other.appendingPathComponent(addingFile.path),
+                                              atomically: true, encoding: .utf8)
+                try await git(["add", "--", addingFile.path], in: other)
+            }
             try await git(["commit", "--quiet", "--all", "--message", "remote change"], in: other)
             try await git(["push", "--quiet", "origin", "main"], in: other)
             // Let the worktree learn it is behind, the way the UI would after a fetch.
@@ -237,6 +242,119 @@ struct StashPullTests {
         #expect(try await fixture.stashCount() == 1)
         // The pull itself still landed.
         #expect(fixture.service.status.behind == 0)
+    }
+
+    @Test("a file that cannot be restored is reported even alongside merge conflicts",
+          arguments: [false, true])
+    func incompleteReapply(textConflict: Bool) async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.write("OLDER saved work\n", to: "older.txt")
+        await fixture.service.createStash(message: "older stash", includeUntracked: true)
+        let olderStash = try #require(fixture.service.stashes.first)
+        try await fixture.pushRemoteChange(line3: "REMOTE-line3",
+                                           addingFile: ("new.txt", "REMOTE file\n"))
+        try fixture.write("LOCAL untracked file\n", to: "new.txt")
+        try fixture.localEdit(line1: textConflict ? "line1" : "LOCAL-line1",
+                              line3: textConflict ? "LOCAL-line3" : "line3")
+        try await fixture.settle()
+
+        await fixture.service.stashPullAndReapply()
+        try await fixture.settle()
+
+        let error = try #require(fixture.service.lastError)
+        #expect(error.message.contains("new.txt") || error.detail?.contains("new.txt") == true)
+        #expect(fixture.service.stashes.count == 2)
+        #expect(fixture.service.status.behind == 0)
+        #expect(!fixture.service.status.changes.contains { $0.path == "new.txt" })
+        #expect(try String(contentsOf: fixture.work.appendingPathComponent("new.txt"),
+                           encoding: .utf8) == "REMOTE file\n")
+        let stash = try #require(fixture.service.stashes.first)
+        let recovery = try #require(fixture.service.stashRecovery)
+        #expect(recovery.stashCommit == stash.commit)
+        #expect(recovery.stashCommit != olderStash.commit)
+        #expect(try await fixture.git(["show", "\(stash.commit)^3:new.txt"], in: fixture.work)
+            == "LOCAL untracked file")
+        if textConflict {
+            #expect(fixture.service.status.conflicts.map(\.path) == ["file.txt"])
+        } else {
+            #expect(fixture.service.status.conflicts.isEmpty)
+            #expect(try fixture.fileContents() == "LOCAL-line1\nline2\nREMOTE-line3\n")
+        }
+
+        // Acknowledging the alert or hiding command output must not hide recovery.
+        fixture.service.lastError = nil
+        fixture.service.clearOperationOutput()
+        try await fixture.fullRefresh()
+        #expect(fixture.service.stashRecovery?.stashCommit == stash.commit)
+        let selection = fixture.service.selectedWorktreePath
+        fixture.service.selectedWorktreePath = nil
+        #expect(fixture.service.stashRecovery == nil)
+        fixture.service.selectedWorktreePath = selection
+        #expect(fixture.service.stashRecovery?.stashCommit == stash.commit)
+        fixture.service.dismissStashRecovery()
+        #expect(fixture.service.stashRecovery == nil)
+        #expect(try await fixture.stashCount() == 2)
+    }
+
+    @Test("manual stash apply also exposes partial restores and keeps recovery visible",
+          arguments: [false, true])
+    func incompleteManualApply(textConflict: Bool) async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try fixture.write("LOCAL untracked file\n", to: "new.txt")
+        try fixture.localEdit(line1: textConflict ? "line1" : "LOCAL-line1",
+                              line3: textConflict ? "LOCAL-line3" : "line3")
+        await fixture.service.createStash(message: "manual apply", includeUntracked: true)
+        let stash = try #require(fixture.service.stashes.first)
+        try await fixture.pushRemoteChange(line3: "REMOTE-line3",
+                                           addingFile: ("new.txt", "REMOTE file\n"))
+        await fixture.service.pull()
+        await fixture.service.applyStash(stash)
+
+        let error = try #require(fixture.service.lastError)
+        #expect(error.detail?.contains("new.txt") == true)
+        #expect(fixture.service.stashRecovery?.stashCommit == stash.commit)
+        #expect(fixture.service.stashes.map(\.commit) == [stash.commit])
+        #expect(fixture.service.status.conflicts.isEmpty == !textConflict)
+        #expect(try String(contentsOf: fixture.work.appendingPathComponent("new.txt"),
+                           encoding: .utf8) == "REMOTE file\n")
+        #expect(try await fixture.git(["show", "\(stash.commit)^3:new.txt"], in: fixture.work)
+            == "LOCAL untracked file")
+    }
+
+    @Test("a missing stash is reported without promising a nonexistent saved copy")
+    func missingManualStash() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let missing = Stash(selector: "stash@{0}", commit: String(repeating: "0", count: 40), message: "missing")
+        await fixture.service.applyStash(missing)
+        #expect(fixture.service.lastError?.title == "Could Not Apply Stash")
+        #expect(fixture.service.stashRecovery == nil)
+        #expect(fixture.service.stashes.isEmpty)
+        #expect(fixture.service.status.isClean)
+    }
+
+    @Test("a pull that conflicts after stashing refreshes conflicts and the retained stash")
+    func pullConflictAfterStashing() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.commitLocal(line3: "LOCAL committed line3")
+        try await fixture.pushRemoteChange(line3: "REMOTE-line3")
+        try fixture.write("UNCOMMITTED file\n", to: "local.txt")
+        fixture.service.refreshSelectedWorktree()
+        try await fixture.settle()
+
+        await fixture.service.stashPullAndReapply()
+        try await fixture.settle()
+
+        #expect(fixture.service.lastError != nil)
+        #expect(fixture.service.stashes.count == 1)
+        #expect(fixture.service.status.conflicts.map(\.path) == ["file.txt"])
+        #expect(fixture.service.mergeOperation == .merge)
+        let stash = try #require(fixture.service.stashes.first)
+        #expect(try await fixture.git(["show", "\(stash.commit)^3:local.txt"], in: fixture.work)
+            == "UNCOMMITTED file")
     }
 
     @Test("with nothing to stash it is an ordinary pull that leaves no stash")
