@@ -48,7 +48,7 @@ public final class GitProcessRunner: GitRunning {
                 executable: executableURL,
                 arguments: arguments,
                 workingDirectory: command.workingDirectory,
-                environment: Self.environment(overrides: command.environmentOverrides)
+                environment: environment(overrides: command.environmentOverrides)
             )
         } catch let failure as ProcessLaunchFailure {
             throw GitError.launchFailed(arguments: arguments, reason: failure.reason)
@@ -78,10 +78,12 @@ public final class GitProcessRunner: GitRunning {
 
     /// The user's environment, plus the few settings needed for non-interactive use.
     ///
-    /// Git configuration and hooks are otherwise left completely untouched: the
-    /// inherited environment is what the user's own shell would give `git`.
-    private static func environment(overrides: [String: String]) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+    /// Preserve the inherited PATH's precedence, adding tool locations that a
+    /// Finder launch can omit. Git configuration and hooks remain untouched.
+    private func environment(overrides: [String: String]) -> [String: String] {
+        var environment = ToolEnvironment.addingSearchPaths(
+            to: ProcessInfo.processInfo.environment, executable: executableURL
+        )
         // There is no terminal attached, so a credential prompt would hang forever.
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_PAGER"] = "cat"

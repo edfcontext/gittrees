@@ -60,6 +60,15 @@ public struct Worktree: Identifiable, Hashable, Sendable {
         !FileManager.default.fileExists(atPath: path.path)
     }
 
+    /// Whether commands can run in this checkout. A prunable worktree can leave its
+    /// directory behind after losing its `.git` file. Checking that entry also covers
+    /// a checkout removed since the last metadata refresh and prevents Git from
+    /// discovering an unrelated repository in a parent directory.
+    public var isWorkingCopyAvailable: Bool {
+        !isBare && !isPrunable && !isMissingOnDisk
+            && FileManager.default.fileExists(atPath: path.appendingPathComponent(".git").path)
+    }
+
     /// A short label for the worktree suitable for lists.
     public var displayName: String {
         if isBare { return "(bare)" }

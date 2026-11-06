@@ -92,8 +92,11 @@ Machine-readable output is used wherever Git offers it:
 | Commit    | `git log -1 -z --format=…` and `git diff-tree --name-status -z` |
 
 Hooks and Git configuration are left alone: commits run without `--no-verify`, and the
-process inherits the user's environment, so credential helpers and `pre-commit` hooks
-behave exactly as they do on the command line.
+process inherits the user's environment. GitTrees appends the selected executable's
+directory and standard Homebrew, MacPorts and system tool directories to PATH, keeping
+existing entries first. This lets Git find installed LFS filters, credential helpers and
+hook tools when GitTrees is launched from Finder. Command-specific environment overrides
+still take precedence. Git LFS must be installed separately; there is no dedicated LFS UI.
 
 ## Features
 
@@ -110,7 +113,10 @@ behave exactly as they do on the command line.
   stale metadata, and remove. The main worktree's branch can be switched with
   `git checkout` — from its header, its context menu, or Repository → Switch Main
   Worktree Branch. A branch already checked out in another worktree is offered but
-  disabled; Git would refuse it.
+  disabled; Git would refuse it. Missing or prunable checkouts show their condition in
+  the detail pane without repeated error alerts, including when the folder remains
+  but its `.git` entry is gone. Restore the checkout and refresh, or explicitly prune
+  the stale record; pruning keeps any remaining files on disk.
 - **Branches** — local and (optionally) remote branches, upstream tracking with
   ahead/behind counts. A filled indicator means the branch has a live worktree; clicking
   it selects that worktree instead of attempting a checkout Git would refuse. A branch

@@ -333,7 +333,7 @@ public final class RepositoryService {
     /// workspace and stale metadata that Git can prune.
     public var linkedWorktreeCount: Int {
         worktrees.count {
-            !$0.isMain && !$0.isBare && !$0.isPrunable && !$0.isMissingOnDisk
+            !$0.isMain && $0.isWorkingCopyAvailable
         }
     }
 
@@ -579,7 +579,7 @@ public final class RepositoryService {
     /// one update, so the sidebar's indicators and timestamps do not flicker row by row.
     private func scanWorktreeActivity() {
         dirtyScanTask?.cancel()
-        let targets = worktrees.filter { !$0.isBare && !$0.isPrunable && !$0.isMissingOnDisk }
+        let targets = worktrees.filter(\.isWorkingCopyAvailable)
         let client = self.client
         dirtyScanTask = Task { [weak self] in
             var dirtyResults: [String: Bool] = [:]
@@ -608,10 +608,8 @@ public final class RepositoryService {
     /// Reloads status and history for the selected worktree.
     public func refreshSelectedWorktree() {
         statusTask?.cancel()
-        guard let worktree = selectedWorktree, !worktree.isBare, !worktree.isMissingOnDisk else {
-            status = .empty
-            history = []
-            mergeOperation = .none
+        guard let worktree = selectedWorktree, worktree.isWorkingCopyAvailable else {
+            clearSelectedWorkingCopyState()
             return
         }
         let logRevisions = historyRevisions(for: worktree)
@@ -629,6 +627,10 @@ public final class RepositoryService {
                 let (loadedStatus, loadedHistory) = try await (statusResult, logResult)
                 let operation = await operationResult ?? .none
                 guard !Task.isCancelled, self.selectedWorktreePath == worktree.id else { return }
+                guard self.selectedWorktree?.isWorkingCopyAvailable == true else {
+                    self.clearSelectedWorkingCopyState()
+                    return
+                }
                 self.status = loadedStatus
                 self.history = loadedHistory
                 self.mergeOperation = operation
@@ -637,9 +639,23 @@ public final class RepositoryService {
                 return
             } catch {
                 guard !Task.isCancelled, self.selectedWorktreePath == worktree.id else { return }
+                // A checkout can disappear while Git is reading it. The detail pane
+                // explains unavailable worktrees; activation must not reopen an alert.
+                guard self.selectedWorktree?.isWorkingCopyAvailable == true else {
+                    self.clearSelectedWorkingCopyState()
+                    return
+                }
                 self.lastError = PresentableError(title: "Could Not Read Status", error: error)
             }
         }
+    }
+
+    private func clearSelectedWorkingCopyState() {
+        status = .empty
+        history = []
+        mergeOperation = .none
+        selectedFileKeys = []
+        selectedFile = nil
     }
 
     /// The `git log` revision arguments for the History panel: empty for the full history
@@ -759,7 +775,7 @@ public final class RepositoryService {
             self?.gitHubAuth = auth
 
             guard auth.isReady, lookupPossible,
-                  let worktree, !worktree.isBare, !worktree.isMissingOnDisk else {
+                  let worktree, worktree.isWorkingCopyAvailable else {
                 self?.pullRequest = nil
                 return
             }
@@ -805,8 +821,16 @@ public final class RepositoryService {
             identity = .unknown
             return
         }
+        guard selectedWorktree == nil || selectedWorktree?.isWorkingCopyAvailable == true else {
+            identity = .unknown
+            return
+        }
+        let selectedPath = selectedWorktreePath
         let directory = selectedWorktree.map(\.path) ?? repository.commandDirectory
-        identity = (try? await client.identity(directory: directory)) ?? .unknown
+        let loadedIdentity = (try? await client.identity(directory: directory)) ?? .unknown
+        guard self.repository?.id == repository.id, selectedWorktreePath == selectedPath else { return }
+        identity = selectedWorktree == nil || selectedWorktree?.isWorkingCopyAvailable == true
+            ? loadedIdentity : .unknown
     }
 
     /// Pins the commit identity on the repository with `git config --local`.
@@ -1066,7 +1090,7 @@ public final class RepositoryService {
 
     /// Reads the worktree's status so the caller can warn before a destructive removal.
     public func changesBlockingRemoval(of worktree: Worktree) async -> WorktreeStatus? {
-        guard !worktree.isMissingOnDisk else { return nil }
+        guard worktree.isWorkingCopyAvailable else { return nil }
         do {
             let status = try await client.statusSummary(worktree: worktree.path)
             return status.isClean ? nil : status
@@ -1791,7 +1815,8 @@ public final class RepositoryService {
     /// False while a merge or rebase is already in flight — that has to be resolved or
     /// aborted before another merge can start — or when there is nothing to merge.
     public var canMerge: Bool {
-        selectedWorktree?.branchRef != nil && mergeOperation == .none && !mergeCandidates.isEmpty
+        selectedWorktree?.isWorkingCopyAvailable == true && selectedWorktree?.branchRef != nil
+            && mergeOperation == .none && !mergeCandidates.isEmpty
     }
 
     public var canRebase: Bool {
@@ -2163,7 +2188,7 @@ public final class RepositoryService {
         title: String,
         _ body: @escaping @Sendable (Worktree) async throws -> String
     ) async {
-        guard let worktree = selectedWorktree else { return }
+        guard let worktree = selectedWorktree, worktree.isWorkingCopyAvailable else { return }
         guard claim(worktree) else { return }
         defer { release(worktree) }
 

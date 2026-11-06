@@ -50,6 +50,7 @@ struct WorktreeDetailView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
+                .disabled(!worktree.isBare && !worktree.isWorkingCopyAvailable)
 
                 Spacer(minLength: 0)
                 if let recovery = service.stashRecovery {
@@ -127,8 +128,8 @@ struct WorktreeDetailView: View {
 
     @ViewBuilder
     private var content: some View {
-        if worktree.isMissingOnDisk {
-            MissingWorktreeView(worktree: worktree, onRequestRemoval: onRequestRemoval)
+        if !worktree.isBare, !worktree.isWorkingCopyAvailable {
+            UnavailableWorktreeView(worktree: worktree, onRequestRemoval: onRequestRemoval)
         } else {
             switch tab {
             case .changes:
@@ -218,7 +219,7 @@ struct WorktreeHeaderBar: View {
     @ViewBuilder
     private var branchTitle: some View {
         let title = worktree.branchName ?? worktree.displayName
-        if worktree.isMain, !worktree.isBare, !worktree.isMissingOnDisk {
+        if worktree.isMain, worktree.isWorkingCopyAvailable {
             Menu {
                 SwitchBranchMenuContent(worktree: worktree)
             } label: {
@@ -279,7 +280,9 @@ struct WorktreeHeaderBar: View {
 
     @ViewBuilder
     private var stateBadge: some View {
-        if !service.status.conflicts.isEmpty {
+        if !worktree.isBare, !worktree.isWorkingCopyAvailable {
+            BadgeLabel(text: "unavailable", tint: .orange)
+        } else if !service.status.conflicts.isEmpty {
             let count = service.status.conflicts.count
             BadgeLabel(text: "\(count) conflict\(count == 1 ? "" : "s")", tint: .red)
         } else if service.status.isClean {
@@ -291,6 +294,7 @@ struct WorktreeHeaderBar: View {
     }
 
     private var trackingText: String? {
+        guard worktree.isWorkingCopyAvailable else { return nil }
         guard let upstream = service.status.upstream else {
             return service.branch(for: worktree)?.hasUpstream == false ? "no upstream" : nil
         }
@@ -308,7 +312,7 @@ struct WorktreeHeaderBar: View {
             if service.remotes.count > 1 { remotePicker }
 
             Button("Stash") { commands.stash() }
-                .disabled(service.status.isClean)
+                .disabled(!worktree.isWorkingCopyAvailable || service.status.isClean)
                 .help(service.status.isClean
                     ? "Nothing to stash — the worktree is clean."
                     : "Set the local changes aside on the stash (⌥⌘S).")
@@ -316,6 +320,7 @@ struct WorktreeHeaderBar: View {
             Divider().frame(height: 16)
 
             Button("Fetch") { Task { await service.fetch() } }
+                .disabled(!worktree.isWorkingCopyAvailable)
                 .help(service.selectedRemote.map { "git fetch \($0) (⇧⌘F)" } ?? "git fetch --all (⇧⌘F)")
             Menu("Pull") {
                 Button("Pull (Merge)") { Task { await service.pull(strategy: .merge) } }
@@ -329,6 +334,7 @@ struct WorktreeHeaderBar: View {
             }
             .menuStyle(.button)
             .fixedSize()
+            .disabled(!worktree.isWorkingCopyAvailable)
             .help("Pull (merge) with ⇧⌘P. Diverged branches merge by default; the menu offers rebase or fast-forward-only.")
             Menu("Push") {
                 Button(service.selectedBranchNeedsUpstream ? "Push (Set Upstream)" : "Push") {
@@ -342,6 +348,7 @@ struct WorktreeHeaderBar: View {
             }
             .menuStyle(.button)
             .fixedSize()
+            .disabled(!worktree.isWorkingCopyAvailable)
             .help(pushHelp)
             .confirmationDialog(
                 "Force push \(worktree.branchName ?? "this branch")?",
@@ -368,6 +375,7 @@ struct WorktreeHeaderBar: View {
 
             if service.hasGitHubRemote {
                 Button(pullRequestButtonTitle) { onCreatePullRequest() }
+                    .disabled(!worktree.isWorkingCopyAvailable)
                     .help(pullRequestButtonHelp)
             }
 
@@ -508,8 +516,8 @@ struct OperationOutputBar: View {
     }
 }
 
-/// Shown when Git still records a worktree whose directory has been deleted.
-struct MissingWorktreeView: View {
+/// Stale metadata can outlive either the checkout directory or just its `.git` entry.
+struct UnavailableWorktreeView: View {
     @Environment(RepositoryService.self) private var service
 
     let worktree: Worktree
@@ -517,7 +525,8 @@ struct MissingWorktreeView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Worktree Directory Is Missing", systemImage: "exclamationmark.triangle")
+            Label(worktree.isMissingOnDisk ? "Worktree Directory Is Missing" : "Worktree Is Unavailable",
+                  systemImage: "exclamationmark.triangle")
         } description: {
             VStack(spacing: 6) {
                 Text(worktree.path.path)
@@ -526,8 +535,11 @@ struct MissingWorktreeView: View {
                 if let reason = worktree.prunableReason {
                     Text("Git reports: \(reason)")
                         .font(.caption)
+                } else if !worktree.isMissingOnDisk {
+                    Text("The directory exists, but its .git entry is missing.")
+                        .font(.caption)
                 }
-                Text("The Git metadata for this worktree still exists. Pruning removes the record; nothing on disk is touched.")
+                Text("Git still records this worktree, but its checkout cannot be read. Restore it and refresh, or prune its stale record. Pruning leaves any remaining files on disk untouched.")
                     .font(.caption)
             }
         } actions: {
@@ -535,6 +547,7 @@ struct MissingWorktreeView: View {
                 Task { await service.pruneWorktrees() }
             }
             Button("Remove Worktree…") { onRequestRemoval(worktree) }
+                .disabled(worktree.isMain)
         }
     }
 }

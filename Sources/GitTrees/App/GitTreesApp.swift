@@ -288,7 +288,7 @@ private struct GitTreesCommands: Commands {
     private var service: RepositoryService? { focusedService ?? session.keyService }
     private var commands: AppCommands? { focusedCommands ?? session.keyCommands }
 
-    private var hasNoWorktree: Bool { service?.selectedWorktree == nil }
+    private var hasNoWorktree: Bool { service?.selectedWorktree?.isWorkingCopyAvailable != true }
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
@@ -388,8 +388,7 @@ private struct GitTreesCommands: Commands {
             Divider()
 
             Button("Security Scan…") { commands?.securityScan() }
-                .disabled(hasNoWorktree || service?.selectedWorktree?.isBare == true
-                          || service?.selectedWorktree?.isMissingOnDisk == true)
+                .disabled(hasNoWorktree)
 
             Divider()
 
@@ -410,7 +409,7 @@ private struct GitTreesCommands: Commands {
                         .disabled(isCurrent || service.isCheckedOutElsewhere(branch, from: main))
                     }
                 }
-                .disabled(main.isMissingOnDisk)
+                .disabled(!main.isWorkingCopyAvailable)
             }
         }
 

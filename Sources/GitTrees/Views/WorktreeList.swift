@@ -144,7 +144,7 @@ struct WorktreeContextMenu: View {
             NSPasteboard.general.setString(worktree.path.path, forType: .string)
         }
 
-        if worktree.isMain, !worktree.isBare, !worktree.isMissingOnDisk {
+        if worktree.isMain, worktree.isWorkingCopyAvailable {
             Divider()
             Menu("Switch Branch") {
                 SwitchBranchMenuContent(worktree: worktree)
@@ -155,14 +155,17 @@ struct WorktreeContextMenu: View {
         Divider()
 
         Button("Fetch") { run { await service.fetch() } }
+            .disabled(!worktree.isWorkingCopyAvailable)
         Button("Pull") { run { await service.pull() } }
+            .disabled(!worktree.isWorkingCopyAvailable)
         Button("Push") { run { await service.push(setUpstream: service.selectedBranchNeedsUpstream) } }
+            .disabled(!worktree.isWorkingCopyAvailable)
 
         Divider()
 
         // Only offered for a worktree Git has something to move: the sidebar's dirty
         // scan is the same signal the row's indicator uses.
-        if service.dirtyStates[worktree.id] == true, !worktree.isMissingOnDisk {
+        if service.dirtyStates[worktree.id] == true, worktree.isWorkingCopyAvailable {
             Button("Move Changes to New Worktree…") {
                 service.selectedWorktreePath = worktree.id
                 commands.branchChanges()

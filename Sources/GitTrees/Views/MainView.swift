@@ -199,7 +199,7 @@ struct MainView: View {
         .onChange(of: commands.securityScanRequested) { _, requested in
             guard requested else { return }
             commands.securityScanRequested = false
-            if let worktree = service.selectedWorktree, !worktree.isBare, !worktree.isMissingOnDisk {
+            if let worktree = service.selectedWorktree, worktree.isWorkingCopyAvailable {
                 activeSheet = .securityScan(worktree)
             }
         }
