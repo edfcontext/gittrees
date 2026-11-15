@@ -29,7 +29,13 @@ extension GitClient {
     /// Reject a stale preview and let Git enforce fast-forward-only at execution time.
     public func fastForward(_ assessment: BranchAssessment) async throws -> String {
         let fresh = try await assessBranches(worktree: assessment.worktree, otherRef: assessment.otherRef)
-        guard fresh == assessment else { throw GitAssistError.stale }
+        // Local edits may change after the preview. Git's checkout checks protect
+        // the live index and working tree; only the branch history must match.
+        guard fresh.currentRef == assessment.currentRef,
+              fresh.otherRef == assessment.otherRef,
+              fresh.currentHead == assessment.currentHead,
+              fresh.otherHead == assessment.otherHead,
+              fresh.operation == assessment.operation else { throw GitAssistError.stale }
         guard fresh.canFastForward else {
             throw GitAssistError.unsupported(fresh.blocker ?? "These branches cannot be fast-forwarded.")
         }

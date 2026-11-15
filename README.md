@@ -10,6 +10,17 @@ repositories.
 It is intentionally narrower than SourceTree or GitKraken: open a repository, see its
 worktrees and branches, work in one of them, commit, and sync with a remote.
 
+## First-time setup
+
+GitTrees opens a setup guide on first launch. Git is required; Apple Command Line
+Tools provide it (`xcode-select --install` in Terminal), or you can select another
+Git executable. GitHub CLI is optional and enables pull request features. Install it
+from [GitHub CLI](https://github.com/cli/cli#installation), sign in with `gh auth login`,
+and choose **Check Again** in the guide. The guide detects common installation paths
+and lets you select custom executables. Reopen it at **Help → Setup Guide…**; paths
+can also be changed in Settings. Git needs a name and email for commits, which can be
+configured for an individual repository in its Info tab.
+
 ## Commit suggestions
 
 On supported Macs running macOS 26 or later, commit suggestions use Apple
@@ -30,7 +41,8 @@ Intelligence. To exercise live on-device suggestions on three synthetic diffs, r
 
 ## Help, acknowledgements and security scanning
 
-Version **1.3 (build 5)** includes **Help → GitTrees Help** and **Help → Acknowledgements**.
+Version **1.4 (build 6)** includes **Help → GitTrees Help**, **Help → Acknowledgements**,
+and the selectable branch history graph.
 GitTrees bundles no third-party code, models or Swift package dependencies; the
 acknowledgements identify optional external tools used from the local environment.
 
@@ -65,6 +77,14 @@ they are independent CI gates so a local distributable build does not install to
 contact external services.
 
 ## Git is the source of truth
+
+Errors show a readable explanation, suggested recovery steps and complete technical
+details in a bounded, scrollable alert. **OK** and **Copy Details** remain visible even
+for very long command output; copying leaves the alert open. Common failures such as
+conflicts, authentication, unavailable Git LFS, rejected pushes and file locks have
+specific guidance. Unrecognized failures retain the original diagnostics and suggest
+reviewing the worktree's current state before retrying. Guidance never runs a repair
+automatically. Errors can appear above a form without losing its inputs.
 
 There is no Git implementation here, and no libgit2 or JGit. Every operation runs the
 installed `git` binary through Foundation's `Process`, with arguments passed as an array:
@@ -136,6 +156,25 @@ still take precedence. Git LFS must be installed separately; there is no dedicat
   This Commit…** to create a local tag. An optional tag message creates an annotated
   tag; leaving it blank creates a lightweight tag. Both use the selected commit's
   exact hash and refuse to overwrite an existing name. Neither action pushes to a remote.
+- **Graph** — select **Graph** in the project sidebar and check the local or remote
+  branches to compare. Colored paths show commits, divergence and merges across the
+  selected histories, including shared ancestors and commits merged into them. Unrelated
+  branch tips are omitted; only selected tips receive branch badges. Choices are remembered per
+  repository, including an empty selection. Searching the branch picker does not change
+  the selection. Select a commit to inspect its message, files and diff, or right-click
+  for the same branch, tag and worktree actions as History. The initial 500 commits can
+  be extended with **Load More**, up to 10,000; continuing history is identified at the
+  boundary. Remote branches reflect the last fetch. Choosing branches never checks them out.
+  A color legend above the graph maps history paths to selected branch names, with matching
+  colors on branch badges. Merged paths use source branch names preserved in conventional
+  Git or pull-request merge messages, including names of deleted branches. Matching local
+  or remote refs supply names for custom merge messages. Branches sharing a path share a
+  color; if no name can be recovered, the legend identifies the merge by its commit hash.
+  The first visit selects the repository's default branch using the locally recorded remote
+  HEAD, preferring a matching local branch. Without that information, conventional names
+  such as `main` or `master` are preferred. Saved choices take precedence; **Default** restores
+  the default branch selection. Layout is prepared in the background so the interface can
+  remain responsive while history loads.
 - **Merge / Rebase** — choose another local or remote-tracking branch and review the
   direction before starting: *Merge source into current* or *Rebase current onto base*.
   Rebase requires a clean worktree and explains that replayed commits get new IDs.
@@ -354,7 +393,7 @@ where gh's own interactive flow belongs; GitTrees never runs interactive gh comm
 GitLab integration, issue tracking, PR review and merge (only *creating* a pull request
 is supported, via the GitHub CLI), interactive rebase, merge editor,
 hunk or line staging, submodules, LFS, SSH keys, credential UI, cloning, signing
-configuration, bisect, reflog, blame, tag deletion/pushing, and commit-graph rendering.
+configuration, bisect, reflog, blame, and tag deletion/pushing.
 Stashes support creating, listing, applying and deleting; there is no separate Pop action. The
 architecture leaves room for these; the scope deliberately does not include them.
 

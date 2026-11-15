@@ -18,7 +18,6 @@ struct CreatePullRequestSheet: View {
     @State private var isDraft = false
     @State private var isCreating = false
     @State private var created: PullRequest?
-    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,18 +65,6 @@ struct CreatePullRequestSheet: View {
 
     private var form: some View {
         Form {
-            if let errorMessage {
-                Section {
-                    Label {
-                        Text(errorMessage)
-                            .textSelection(.enabled)
-                    } icon: {
-                        Image(systemName: "xmark.octagon.fill")
-                    }
-                    .foregroundStyle(.red)
-                }
-            }
-
             if let blocker = service.pullRequestBlocker {
                 Section {
                     Label(blocker, systemImage: "exclamationmark.triangle.fill")
@@ -251,20 +238,14 @@ struct CreatePullRequestSheet: View {
             isDraft: isDraft
         )
         isCreating = true
-        errorMessage = nil
         Task {
             let result = await service.createPullRequest(draft)
             isCreating = false
             if let result {
                 created = result
-            } else {
-                // The global error alert is bound to the view behind this sheet and
-                // cannot present over it, so the failure has to be shown here — otherwise
-                // Create looks like it did nothing. Consume lastError so the alert does
-                // not also fire once the sheet is dismissed.
-                errorMessage = service.lastError?.message ?? "Creating the pull request failed."
-                service.lastError = nil
             }
+            // Leave failures in lastError: the scrollable presenter opens above this
+            // form, preserving both the complete diagnostics and the user's draft.
         }
     }
 }

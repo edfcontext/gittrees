@@ -19,6 +19,12 @@ struct RepositorySidebar: View {
             header
 
             List(selection: $selection) {
+                if service.repository != nil {
+                    Section {
+                        Label("Graph", systemImage: "point.3.connected.trianglepath.dotted")
+                            .tag(SidebarItem.graph)
+                    }
+                }
                 WorktreeList(
                     selection: $selection,
                     onRequestRemoval: onRequestRemoval,

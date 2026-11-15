@@ -47,7 +47,74 @@ struct GitAssistTests {
         #expect(try fixture.fileContents("base.txt") == "base\n")
     }
 
-    @Test("fast-forward rejects dirty or stale previews", arguments: ["dirty", "source", "current", "checkout"])
+    @Test("fast-forward preserves unrelated local edits, including edits after the preview",
+          arguments: ["unstaged", "staged", "untracked", "after-preview"])
+    func fastForwardWithLocalChanges(kind: String) async throws {
+        let fixture = try await MergeTests.Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.branchAddingFile("base", named: "base.txt", contents: "base\n")
+        let client = GitClient()
+        let cleanPreview = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
+        let path = kind == "untracked" ? "notes.txt" : "file.txt"
+        try fixture.write("local work\n", to: path)
+        if kind == "staged" {
+            try await fixture.git(["add", path], in: fixture.work)
+            try fixture.write("local work plus unstaged edits\n", to: path)
+        }
+        let contents = try fixture.fileContents(path)
+        let status = try await fixture.git(["status", "--porcelain"], in: fixture.work)
+        let indexDiff = try await fixture.git(["diff", "--cached"], in: fixture.work)
+        let dirtyPreview = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
+        #expect(!dirtyPreview.clean)
+        #expect(dirtyPreview.canFastForward)
+        #expect(dirtyPreview.blocker == nil)
+
+        try await fixture.service.fastForward(kind == "after-preview" ? cleanPreview : dirtyPreview)
+
+        #expect(try await fixture.git(["rev-parse", "HEAD"], in: fixture.work) == dirtyPreview.otherHead)
+        #expect(try fixture.fileContents(path) == contents)
+        #expect(try fixture.fileContents("base.txt") == "base\n")
+        #expect(try await fixture.git(["status", "--porcelain"], in: fixture.work) == status)
+        #expect(try await fixture.git(["diff", "--cached"], in: fixture.work) == indexDiff)
+    }
+
+    @Test("fast-forward refuses to overwrite local changes even with autostash configured",
+          arguments: ["unstaged", "staged", "untracked", "after-preview"])
+    func fastForwardProtectsLocalChanges(kind: String) async throws {
+        let fixture = try await MergeTests.Fixture()
+        defer { fixture.cleanUp() }
+        try await fixture.branchAddingFile("base", named: "base.txt", contents: "incoming\n")
+        let client = GitClient()
+        let cleanPreview = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
+        let path = kind == "untracked" ? "base.txt" : "file.txt"
+        if kind != "untracked" {
+            try await fixture.git(["checkout", "base"], in: fixture.work)
+            try await fixture.commitHere(contents: "incoming tracked change\n")
+            try await fixture.git(["checkout", "main"], in: fixture.work)
+            try await fixture.fullRefresh()
+        }
+        let preview = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
+        try fixture.write("local work\n", to: path)
+        if kind == "staged" { try await fixture.git(["add", path], in: fixture.work) }
+        try await fixture.git(["config", "merge.autoStash", "true"], in: fixture.work)
+        let status = try await fixture.git(["status", "--porcelain"], in: fixture.work)
+        let indexDiff = try await fixture.git(["diff", "--cached"], in: fixture.work)
+        let dirtyPreview = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
+        #expect(dirtyPreview.canFastForward)
+
+        await #expect(throws: GitError.self) {
+            try await fixture.service.fastForward(kind == "after-preview" ? preview : dirtyPreview)
+        }
+
+        #expect(try await fixture.git(["rev-parse", "HEAD"], in: fixture.work) == cleanPreview.currentHead)
+        #expect(try fixture.fileContents(path) == "local work\n")
+        #expect(try await fixture.git(["status", "--porcelain"], in: fixture.work) == status)
+        #expect(try await fixture.git(["diff", "--cached"], in: fixture.work) == indexDiff)
+        #expect(try await fixture.git(["stash", "list"], in: fixture.work) == "")
+        #expect(try await client.inProgressOperation(worktree: fixture.work) == .none)
+    }
+
+    @Test("fast-forward rejects stale branch previews", arguments: ["source", "current", "checkout"])
     func staleFastForward(change: String) async throws {
         let fixture = try await MergeTests.Fixture()
         defer { fixture.cleanUp() }
@@ -55,7 +122,6 @@ struct GitAssistTests {
         let client = GitClient()
         let assessment = try await client.assessBranches(worktree: fixture.work, otherRef: "refs/heads/base")
         switch change {
-        case "dirty": try fixture.write("unsaved work\n", to: "file.txt")
         case "source": try await fixture.git(["update-ref", "refs/heads/base", assessment.currentHead], in: fixture.work)
         case "current": try await fixture.commitHere(contents: "new commit\n")
         default: try await fixture.git(["checkout", "-b", "other"], in: fixture.work)

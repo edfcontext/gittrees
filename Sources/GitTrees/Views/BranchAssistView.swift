@@ -26,6 +26,10 @@ struct BranchAssistView: View {
                     Text(blocker).font(.caption).foregroundStyle(.orange)
                 }
                 if assessment.relationship == .fastForward {
+                    if !assessment.clean {
+                        Text("Local changes are allowed. Git will stop if the update would overwrite them.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Button("Fast-Forward \(assessment.currentName) to \(assessment.otherName)") {
                         isApplying = true
                         Task {

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// What the sidebar can have selected. Worktrees are addressed by path and branches by
 /// ref so a refresh cannot move the selection to a different object.
 enum SidebarItem: Hashable {
+    case graph
     case worktree(String)
     case branch(String)
 }
@@ -48,8 +49,6 @@ struct MainView: View {
         } detail: {
             detail
                 // Opening a folder that is not a repository offers to create one there.
-                // This alert is attached here rather than alongside the error alert
-                // above: two alerts on a single view do not both present.
                 .alert(
                     "Not a Git Repository",
                     isPresented: Binding(
@@ -119,17 +118,12 @@ struct MainView: View {
                 SecurityScanSheet(worktree: worktree)
             }
         }
-        .alert(
-            service.lastError?.title ?? "Git Error",
-            isPresented: Binding(
-                get: { service.lastError != nil },
-                set: { if !$0 { service.lastError = nil } }
-            ),
-            presenting: service.lastError
-        ) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { error in
-            Text(errorBody(error))
+        .background {
+            ErrorAlertPresenter(error: Binding(
+                get: { service.lastError },
+                set: { service.lastError = $0 }
+            ))
+            .frame(width: 0, height: 0)
         }
     }
 
@@ -219,6 +213,13 @@ struct MainView: View {
                 onOpen: { showingOpenPanel = true },
                 onNewWorkspace: { activeSheet = .newWorkspace }
             )
+        } else if selection == .graph, let repository = service.repository {
+            GraphView(
+                repository: repository,
+                onCreateWorktreeAtCommit: { activeSheet = .worktreeAtCommit($0) },
+                onCreateReferenceAtCommit: { activeSheet = .referenceAtCommit($0, $1) }
+            )
+            .id(repository.id)
         } else if let worktree = service.selectedWorktree {
             WorktreeDetailView(
                 worktree: worktree,
@@ -289,6 +290,8 @@ struct MainView: View {
     /// attempting a second checkout, which Git would refuse.
     private func applySelection(_ item: SidebarItem?) {
         switch item {
+        case .graph:
+            service.selectedWorktreePath = nil
         case .worktree(let path):
             service.selectedWorktreePath = path
         case .branch(let ref):
@@ -363,14 +366,6 @@ struct MainView: View {
         } catch {
             service.lastError = PresentableError(title: "Could Not Open Worktree", error: error)
         }
-    }
-
-    private func errorBody(_ error: PresentableError) -> String {
-        // Stash diagnostics can include a full status listing. Keep the alert readable;
-        // the recovery notice retains the complete, scrollable Details view.
-        if service.stashRecovery?.error.id == error.id { return error.message }
-        guard let detail = error.detail, !detail.isEmpty else { return error.message }
-        return "\(error.message)\n\n\(detail)"
     }
 }
 

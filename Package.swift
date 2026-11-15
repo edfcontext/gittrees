@@ -30,6 +30,11 @@ let package = Package(
             name: "GitTreesCoreTests",
             dependencies: ["GitTreesCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "GitTreesTests",
+            dependencies: ["GitTrees"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

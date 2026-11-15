@@ -1,37 +1,6 @@
 import Foundation
 import Observation
 
-/// A Git error shaped for presentation, keeping the underlying detail for debugging.
-public struct PresentableError: Identifiable, Sendable {
-    public let id = UUID()
-    public var title: String
-    public var message: String
-    /// The command that failed, its exit code and its output.
-    public var detail: String?
-
-    public init(title: String, message: String, detail: String? = nil) {
-        self.title = title
-        self.message = message
-        self.detail = detail
-    }
-
-    public init(title: String, error: Error) {
-        self.title = title
-        if let failure = (error as? CommandExecutionError)?.failure {
-            self.message = failure.message
-            self.detail = """
-            \(failure.commandLine)
-            exit code: \(failure.exitCode)
-            \(failure.workingDirectory.map { "directory: \($0)" } ?? "")
-            \(failure.stdout.isEmpty ? "" : "\nstdout:\n\(failure.stdout)")
-            """.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            self.message = error.localizedDescription
-            self.detail = (error as? LocalizedError)?.recoverySuggestion
-        }
-    }
-}
-
 /// A long-running Git operation, surfaced as a progress indicator.
 public struct ActiveOperation: Identifiable, Sendable, Equatable {
     public let id = UUID()
@@ -138,8 +107,11 @@ public final class RepositoryService {
     public private(set) var repository: Repository?
     public private(set) var worktrees: [Worktree] = []
     public private(set) var branches: [Branch] = []
+    public private(set) var defaultBranch: Branch?
     public private(set) var status: WorktreeStatus = .empty
     public private(set) var history: [CommitSummary] = []
+    /// Changes even when refs are unchanged, so a manual refresh can retry Graph.
+    public private(set) var graphRevision = 0
     /// Dirty flag per worktree path, filled in by a background scan so the sidebar can
     /// show which worktrees have uncommitted work without blocking the first paint.
     public private(set) var dirtyStates: [String: Bool] = [:]
@@ -363,6 +335,7 @@ public final class RepositoryService {
             selectedWorktreePath = nil
             worktrees = []
             branches = []
+            defaultBranch = nil
             dirtyStates = [:]
             worktreeActivityDates = [:]
             // A different repository carries its own fetch cadence; don't let the previous
@@ -377,6 +350,7 @@ public final class RepositoryService {
             repository = nil
             worktrees = []
             branches = []
+            defaultBranch = nil
             dirtyStates = [:]
             worktreeActivityDates = [:]
             // "Not a repository" is an offer to make one, not a failure to report.
@@ -435,6 +409,7 @@ public final class RepositoryService {
         repository = nil
         worktrees = []
         branches = []
+        defaultBranch = nil
         status = .empty
         history = []
         selectedWorktreePath = nil
@@ -538,11 +513,16 @@ public final class RepositoryService {
             async let worktreeList = client.worktrees(repository: repository.commandDirectory)
             async let branchList = client.branches(repository: repository.commandDirectory)
             async let remoteList = client.remotes(repository: repository.commandDirectory)
-            let (loadedWorktrees, loadedBranches, loadedRemotes) =
-                try await (worktreeList, branchList, remoteList)
+            async let remoteDefault = try? client.defaultBranch(
+                repository: repository.commandDirectory, preferredRemote: preferences.preferredRemote(for: repository)
+            )
+            let (loadedWorktrees, loadedBranches, loadedRemotes, loadedDefault) =
+                try await (worktreeList, branchList, remoteList, remoteDefault)
 
             worktrees = loadedWorktrees
             branches = loadedBranches
+            defaultBranch = GraphBranchSelection.defaultBranch(from: loadedBranches, remoteDefault: loadedDefault)
+            graphRevision &+= 1
             remotes = loadedRemotes
             // Best-effort: a stash-list failure must not fail the whole reload.
             if let loadedStashes = try? await client.stashes(repository: repository.commandDirectory) {
@@ -1667,26 +1647,33 @@ public final class RepositoryService {
         )
     }
 
-    /// Identity, message and files for one commit in the selected worktree.
+    /// Identity, message and files for one commit, including repository-wide Graph.
     public func commitDetail(hash: String) async throws -> CommitDetail {
-        guard let worktree = selectedWorktree else {
+        guard let directory = selectedWorktree?.path ?? repository?.commandDirectory else {
             throw GitError.unexpectedOutput(
-                reason: "no worktree is selected",
+                reason: "no repository is open",
                 arguments: ["log", "-1"]
             )
         }
-        return try await client.commitDetail(worktree: worktree.path, hash: hash)
+        return try await client.commitDetail(worktree: directory, hash: hash)
     }
 
     /// Unified diff of one path as introduced by `hash`.
     public func commitDiff(hash: String, path: String) async throws -> String {
-        guard let worktree = selectedWorktree else { return "" }
+        guard let directory = selectedWorktree?.path ?? repository?.commandDirectory else { return "" }
         return try await client.commitDiff(
-            worktree: worktree.path,
+            worktree: directory,
             hash: hash,
             path: path,
             contextLines: preferences.diffContextLines
         )
+    }
+
+    public func graph(branches: [Branch], limit: Int = 500) async throws -> CommitGraph {
+        guard let repository else { return CommitGraph() }
+        rebuildClientIfNeeded()
+        return try await client.graph(repository: repository.commandDirectory, branches: branches, limit: limit,
+                                      knownBranches: self.branches)
     }
 
     // MARK: - Commit
@@ -1999,7 +1986,7 @@ public final class RepositoryService {
 
     private nonisolated static func diagnosticOutput(_ error: Error) -> String {
         let diagnostic = PresentableError(title: "", error: error)
-        return [diagnostic.message, diagnostic.detail].compactMap { $0 }.joined(separator: "\n\n")
+        return diagnostic.diagnosticText
     }
 
     private nonisolated static func stashRecoveryError(
@@ -2009,7 +1996,11 @@ public final class RepositoryService {
         return PresentableError(
             title: title,
             message: "\(reason)\(files)\n\nThe original changes are kept in stash \(stash.prefix(7)). Review Changes and the saved stash before applying anything again.",
-            detail: diagnosticOutput(error)
+            detail: diagnosticOutput(error),
+            recoverySteps: [
+                "Review Changes and resolve any conflicted files. Inspect the saved stash in Stashes to find work that was not restored.",
+                "Keep the saved stash until you have confirmed that all original changes are present. Review the recovery notice before applying the stash again."
+            ]
         )
     }
 

@@ -25,6 +25,7 @@ public final class PreferencesService {
         static let historyCurrentBranchOnly = "historyCurrentBranchOnly"
         static let preferredRemotes = "preferredRemotes"
         static let lastWorkspaceParent = "lastWorkspaceParent"
+        static let graphBranches = "graphBranches"
     }
 
     /// The number of recently opened repositories kept in the Open Recent menu.
@@ -52,6 +53,7 @@ public final class PreferencesService {
         self.worktreeRoots = defaults.dictionary(forKey: Key.worktreeRoots) as? [String: String] ?? [:]
         self.preferredRemotes = defaults.dictionary(forKey: Key.preferredRemotes) as? [String: String] ?? [:]
         self.lastWorkspaceParentPath = defaults.string(forKey: Key.lastWorkspaceParent)
+        self.graphBranches = defaults.dictionary(forKey: Key.graphBranches) as? [String: [String]] ?? [:]
         let lastPath = defaults.string(forKey: Key.lastRepositoryPath)
         self.lastRepositoryPath = lastPath
         // A previous version stored only the last window. Lift that into the list so
@@ -127,6 +129,19 @@ public final class PreferencesService {
 
     private var preferredRemotes: [String: String] {
         didSet { defaults.set(preferredRemotes, forKey: Key.preferredRemotes) }
+    }
+
+    private var graphBranches: [String: [String]] {
+        didSet { defaults.set(graphBranches, forKey: Key.graphBranches) }
+    }
+
+    /// Nil means never configured; an empty set means the user explicitly cleared it.
+    public func selectedGraphBranches(for repository: Repository) -> Set<String>? {
+        graphBranches[repository.id].map(Set.init)
+    }
+
+    public func setSelectedGraphBranches(_ refs: Set<String>, for repository: Repository) {
+        graphBranches[repository.id] = refs.sorted()
     }
 
     public private(set) var lastRepositoryPath: String? {

@@ -33,7 +33,7 @@ public struct BranchAssessment: Sendable, Equatable {
 
     public var currentName: String { RefName.shortenLocal(currentRef) }
     public var otherName: String { RefName.shortenLocal(otherRef) }
-    public var canFastForward: Bool { relationship == .fastForward && clean && operation == .none }
+    public var canFastForward: Bool { relationship == .fastForward && operation == .none }
     public var summary: String {
         switch relationship {
         case .identical: "\(currentName) and \(otherName) point to the same commit. No update is needed."
@@ -45,7 +45,7 @@ public struct BranchAssessment: Sendable, Equatable {
     }
     public var blocker: String? {
         if operation != .none { return "Finish or abort the current merge or rebase in Changes first." }
-        if !clean { return "Commit or stash local changes before using Fast-Forward or Rebase." }
+        if !clean && relationship != .fastForward { return "Commit or stash local changes before rebasing." }
         return nil
     }
 }

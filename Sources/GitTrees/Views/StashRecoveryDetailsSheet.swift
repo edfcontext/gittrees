@@ -10,9 +10,13 @@ struct StashRecoveryDetailsSheet: View {
             Text(error.title).font(.headline)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(error.message)
-                    if let detail = error.detail {
-                        Text(detail).font(GitTreesUI.monospaced)
+                    Text("What happened").font(.headline)
+                    Text(error.summary)
+                    Text("How to resolve").font(.headline)
+                    Text(error.recoveryText)
+                    if error.hasTechnicalDetails {
+                        Text("Technical details").font(.headline)
+                        Text(error.diagnosticText).font(GitTreesUI.monospaced)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

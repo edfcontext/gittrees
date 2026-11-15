@@ -182,6 +182,26 @@ public final class GitClient: Sendable {
         return try BranchParser.parse(result.stdout)
     }
 
+    /// Read existing remote HEAD aliases without contacting any server. A preferred
+    /// remote wins, followed by origin and then the other remotes in name order.
+    public func defaultBranch(repository: URL, preferredRemote: String? = nil) async throws -> GitDefaultBranch? {
+        let result = try await run(
+            ["for-each-ref", "--format=%(refname)%00%(symref)", "refs/remotes"], in: repository
+        )
+        var defaults: [String: GitDefaultBranch] = [:]
+        for line in result.stdoutText.split(separator: "\n") {
+            let fields = line.split(separator: "\0", omittingEmptySubsequences: false)
+            guard fields.count == 2, fields[0].hasSuffix("/HEAD") else { continue }
+            let remote = String(fields[0].dropFirst(RefName.remotePrefix.count).dropLast(5))
+            let prefix = RefName.remotePrefix + remote + "/"
+            guard fields[1].hasPrefix(prefix) else { continue }
+            defaults[remote] = GitDefaultBranch(localRef: RefName.localPrefix + fields[1].dropFirst(prefix.count),
+                                                remoteRef: String(fields[1]))
+        }
+        let order = [preferredRemote, "origin"].compactMap { $0 } + defaults.keys.sorted()
+        return order.compactMap { defaults[$0] }.first
+    }
+
     /// The short name of the branch checked out in `worktree`, or nil when detached.
     public func currentBranch(worktree: URL) async throws -> String? {
         let result = try await run(
@@ -1026,7 +1046,57 @@ public final class GitClient: Sendable {
         "%H", "%h", "%an", "%ae", "%aI", "%P", "%s", "%b"
     ].joined(separator: "%x00")
 
-    /// A flat, chronological commit list. Rendering a commit graph is out of scope.
+    static let graphFormat = ["%H", "%h", "%an", "%aI", "%P", "%s"].joined(separator: "%x00")
+
+    /// Union of the selected branch histories. Snapshot hashes avoid races between
+    /// loading branch tips and decorating their commits, and cannot act as Git options.
+    public func graph(repository: URL, branches: [Branch], limit: Int = 500,
+                      knownBranches: [Branch]? = nil) async throws -> CommitGraph {
+        guard !branches.isEmpty else { return CommitGraph() }
+        for branch in branches {
+            let hash = branch.objectName
+            guard [40, 64].contains(hash.utf8.count),
+                  hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw GitError.unexpectedOutput(reason: "invalid branch tip hash", arguments: ["log"])
+            }
+        }
+        let count = min(max(limit, 1), 10_000)
+        async let shallowBoundaries = shallowBoundaryHashes(repository: repository)
+        let result = try await run(
+            ["log", "--topo-order", "--no-decorate", "--no-show-signature", "--no-notes",
+             "--max-count=\(count + 1)", "-z", "--format=\(Self.graphFormat)", "--end-of-options"]
+                + Set(branches.map(\.objectName)).sorted() + ["--"],
+            in: repository
+        )
+        let namingBranches: [Branch]
+        if let knownBranches {
+            namingBranches = knownBranches
+        } else {
+            namingBranches = try await self.branches(repository: repository)
+        }
+        let commits = try await CommitGraphParser.parse(result.stdout, branches: branches,
+                                                       knownBranches: namingBranches,
+                                                       shallowBoundaryHashes: shallowBoundaries)
+        return CommitGraph(commits: Array(commits.prefix(count)), hasMore: commits.count > count)
+    }
+
+    private func shallowBoundaryHashes(repository: URL) async throws -> Set<String> {
+        let shallow = try await run(["rev-parse", "--is-shallow-repository"], in: repository)
+        guard shallow.trimmedStdout == "true" else { return [] }
+        // Ask Git for the shared file location; linked worktrees and bare clones
+        // do not keep it at <working directory>/.git/shallow.
+        let path = try await run(["rev-parse", "--path-format=absolute", "--git-path", "shallow"],
+                                 in: repository).trimmedStdout
+        do {
+            let contents = try String(contentsOfFile: path, encoding: .utf8)
+            return Set(contents.split(whereSeparator: \.isWhitespace).map(String.init))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            // A concurrent fetch --unshallow may have removed the file.
+            return []
+        }
+    }
+
+    /// A flat, chronological commit list.
     /// `revisions` restricts which commits are listed, e.g. `["main..HEAD"]` for the
     /// commits on this branch since it left `main`. Empty lists the branch tip's history.
     public func log(worktree: URL, limit: Int = 200, revisions: [String] = []) async throws -> [CommitSummary] {

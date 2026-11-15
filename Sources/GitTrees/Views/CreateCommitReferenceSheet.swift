@@ -18,7 +18,6 @@ struct CreateCommitReferenceSheet: View {
     @State private var name = ""
     @State private var message = ""
     @State private var isCreating = false
-    @State private var errorMessage: String?
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -51,7 +50,7 @@ struct CreateCommitReferenceSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            if let problem = nameConflict ?? errorMessage {
+            if let problem = nameConflict {
                 Text(problem)
                     .font(.callout).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -74,7 +73,6 @@ struct CreateCommitReferenceSheet: View {
         .disabled(isCreating)
         .interactiveDismissDisabled(isCreating)
         .onAppear { nameFocused = true }
-        .onChange(of: name) { _, _ in errorMessage = nil }
         .onChange(of: service.repository?.id) { _, _ in dismiss() }
     }
 
@@ -95,7 +93,6 @@ struct CreateCommitReferenceSheet: View {
         let referenceName = trimmedName
         let tagMessage = message
         isCreating = true
-        errorMessage = nil
         Task {
             let created: Bool
             switch kind {
@@ -107,12 +104,8 @@ struct CreateCommitReferenceSheet: View {
             isCreating = false
             if created {
                 dismiss()
-            } else {
-                // Keep the dialog open so the name can be corrected without selecting
-                // the commit again; consume the error before the window's alert fires.
-                errorMessage = service.lastError?.message ?? "Could not create the \(kind.rawValue). Try again."
-                service.lastError = nil
             }
+            // The error presenter opens above this form without losing the inputs.
         }
     }
 }

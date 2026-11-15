@@ -15,6 +15,9 @@ final class AppSession {
     let inactiveService: RepositoryService
     weak var keyService: RepositoryService?
     weak var keyCommands: AppCommands?
+    var showSetup = false
+    var setupWindowID: ObjectIdentifier?
+    var didConsiderSetup = false
     /// Consumed FIFO by windows as they appear.
     private var pendingDirectories: [URL] = []
     /// Live repository windows, keyed by their service identity.
@@ -196,7 +199,20 @@ struct RepositoryWindow: View {
                     session.windowWillClose(service, preferences: preferences)
                 }
             )
-            .onAppear { session.registerWindow(service) }
+            .onAppear {
+                session.registerWindow(service)
+                if !session.didConsiderSetup {
+                    session.didConsiderSetup = true
+                    session.setupWindowID = ObjectIdentifier(service)
+                    session.showSetup = !UserDefaults.standard.bool(forKey: "hasSeenSetup")
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { session.showSetup && session.setupWindowID == ObjectIdentifier(service) },
+                set: { if !$0 { session.showSetup = false } }
+            )) {
+                SetupView().environment(preferences).environment(service)
+            }
             .focusedSceneValue(\.repositoryService, service)
             .focusedSceneValue(\.appCommands, commands)
     }
@@ -292,6 +308,12 @@ private struct GitTreesCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
+            Button("Setup Guide…") {
+                if let service {
+                    session.setupWindowID = ObjectIdentifier(service)
+                    session.showSetup = true
+                }
+            }.disabled(service == nil)
             Button("GitTrees Help") { openWindow(id: "help") }
                 .keyboardShortcut("/", modifiers: [.command, .shift])
             Button("Acknowledgements…") { openWindow(id: "acknowledgements") }

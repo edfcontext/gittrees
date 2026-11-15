@@ -4,8 +4,8 @@ import SwiftUI
 
 /// A flat commit list for the selected worktree, with an inspector for the selection.
 ///
-/// Deliberately not a commit graph: this exists to answer "what is on this branch"
-/// and "what did this commit change". Graph rendering is out of scope.
+/// Answers "what is on this worktree's branch"; the project-wide Graph panel
+/// compares the ancestry of multiple selected branches.
 struct HistoryView: View {
     @Environment(RepositoryService.self) private var service
     @Environment(PreferencesService.self) private var preferences
