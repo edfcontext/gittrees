@@ -390,8 +390,8 @@ private struct GitTreesCommands: Commands {
             Button("Add Remote…") { commands?.addRemote() }
                 .disabled(service?.repository == nil)
 
-            Button("Create Pull Request…") { commands?.createPullRequest() }
-                .disabled(hasNoWorktree)
+            Button("Pull Requests…") { commands?.createPullRequest() }
+                .disabled(service?.repository == nil)
 
             Divider()
 

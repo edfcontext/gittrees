@@ -445,7 +445,7 @@ struct WorktreeHeaderBar: View {
         if let pr = service.pullRequest, pr.isOpen {
             return "View pull request #\(pr.number) for this branch"
         }
-        return "Open a pull request with gh pr create"
+        return "Find or create a GitHub pull request"
     }
 
     private var pushHelp: String {

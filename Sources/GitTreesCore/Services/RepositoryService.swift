@@ -780,11 +780,103 @@ public final class RepositoryService {
         return created
     }
 
-    /// Opens the pull request (or its create page) in the browser.
-    public func openPullRequestInBrowser() async {
-        guard let worktree = selectedWorktree else { return }
-        _ = await withOperation(label: "Opening browser…", worktree: worktree) { [gitHubClient] in
-            try await gitHubClient.openPullRequestInBrowser(worktree: worktree.path)
+    private var pullRequestDirectory: URL? {
+        if let worktree = selectedWorktree, worktree.isWorkingCopyAvailable {
+            return worktree.path
+        }
+        return repository?.commandDirectory
+    }
+
+    public func loadPullRequest(_ reference: String) async -> PullRequest? {
+        guard let directory = pullRequestDirectory, gitHubAuth.isReady, activeOperation == nil else { return nil }
+        return await withOperation(label: "Loading pull request…") { [gitHubClient] in
+            try await gitHubClient.pullRequest(reference, directory: directory)
+        } onFailure: { error in
+            PresentableError(title: "Could Not Load Pull Request", error: error)
+        } thenReturning: { $0 }
+    }
+
+    public func openPullRequests(limit: Int) async throws -> [PullRequest] {
+        guard let repository else { return [] }
+        return try await gitHubClient.openPullRequests(directory: repository.commandDirectory, limit: limit)
+    }
+
+    public func pullRequestChanges(_ request: PullRequest) async throws -> PullRequestChanges {
+        try await gitHubClient.pullRequestChanges(request, directory: signedInPullRequestDirectory())
+    }
+
+    public func pullRequestChecks(_ request: PullRequest) async throws -> [PullRequestCheck] {
+        try await gitHubClient.pullRequestChecks(request, directory: signedInPullRequestDirectory())
+    }
+
+    public func pullRequestCheckDetails(_ check: PullRequestCheck, request: PullRequest) async throws -> PullRequestCheckDetails {
+        try await gitHubClient.pullRequestCheckDetails(check, request: request, directory: signedInPullRequestDirectory())
+    }
+
+    public func pullRequestCheckLog(_ check: PullRequestCheck, request: PullRequest, failedOnly: Bool) async throws -> String {
+        try await gitHubClient.pullRequestCheckLog(
+            check, request: request, failedOnly: failedOnly, directory: signedInPullRequestDirectory()
+        )
+    }
+
+    private func signedInPullRequestDirectory() throws -> URL {
+        guard let directory = pullRequestDirectory, gitHubAuth.isReady else {
+            throw GitHubError.notAuthenticated
+        }
+        return directory
+    }
+
+    public func performPullRequestAction(
+        _ action: PullRequestAction, on pr: PullRequest
+    ) async -> (pullRequest: PullRequest?, message: String)? {
+        guard let directory = pullRequestDirectory, gitHubAuth.isReady, activeOperation == nil else { return nil }
+        let label: String
+        let errorTitle: String
+        switch action {
+        case .approve:
+            label = "Approving pull request…"
+            errorTitle = "Could Not Approve Pull Request"
+        case .merge:
+            label = "Merging pull request…"
+            errorTitle = "Could Not Merge Pull Request"
+        }
+
+        return await withOperation(label: label, worktree: selectedWorktree) { [gitHubClient] in
+            let result = try await gitHubClient.perform(action, on: pr, directory: directory)
+            // The write succeeded even if reading the updated PR fails.
+            let updated = try? await gitHubClient.pullRequest(pr.url, directory: directory)
+            return (result, updated)
+        } onFailure: { error in
+            PresentableError(title: errorTitle, error: error)
+        } thenReturning: { result, updated in
+            if let updated, self.pullRequest?.url == pr.url {
+                self.gitHubTask?.cancel()
+                self.pullRequest = updated
+            }
+            let message: String
+            switch action {
+            case .approve:
+                message = "Approved pull request #\(pr.number)."
+            case .merge:
+                let output = [result.stdoutText, result.stderrText]
+                    .joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if updated?.isMerged == true {
+                    message = "Merged pull request #\(pr.number)."
+                } else {
+                    message = output.isEmpty ? "GitHub accepted the merge request." : output
+                }
+            }
+            self.lastOperationOutput = "\(message)\n\(pr.url)"
+            return (updated, message)
+        }
+    }
+
+    /// Opens the displayed PR, or the selected worktree's branch PR by default.
+    public func openPullRequestInBrowser(_ pr: PullRequest? = nil) async {
+        guard let directory = pullRequestDirectory, activeOperation == nil else { return }
+        _ = await withOperation(label: "Opening browser…", worktree: selectedWorktree) { [gitHubClient] in
+            try await gitHubClient.openPullRequestInBrowser(worktree: directory, reference: pr?.url)
         } onFailure: { error in
             PresentableError(title: "Could Not Open Pull Request", error: error)
         } thenReturning: { }

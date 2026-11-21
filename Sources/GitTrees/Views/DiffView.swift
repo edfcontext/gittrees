@@ -164,13 +164,22 @@ struct DiffView: View {
     }
 }
 
-/// Renders a unified diff in an `NSTextView`.
+struct DiffTextView: View {
+    let diff: String
+
+    var body: some View {
+        MonospacedTextView(text: diff, highlightsDiff: true)
+    }
+}
+
+/// Renders diffs and logs in an `NSTextView`.
 ///
 /// A SwiftUI `Text` re-lays out its whole string on every change, which a few thousand
 /// diff lines make expensive; an `NSTextView` also brings native selection, find and
 /// scrolling, which a diff viewer needs anyway.
-struct DiffTextView: NSViewRepresentable {
-    let diff: String
+struct MonospacedTextView: NSViewRepresentable {
+    let text: String
+    var highlightsDiff = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -179,6 +188,7 @@ struct DiffTextView: NSViewRepresentable {
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
+        textView.usesFindBar = true
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isVerticallyResizable = true
@@ -210,9 +220,16 @@ struct DiffTextView: NSViewRepresentable {
     }
 
     private func apply(to textView: NSTextView, coordinator: Coordinator) {
-        guard coordinator.lastDiff != diff else { return }
-        coordinator.lastDiff = diff
-        textView.textStorage?.setAttributedString(Self.attributed(diff))
+        guard coordinator.lastText != text || coordinator.highlightsDiff != highlightsDiff else { return }
+        coordinator.lastText = text
+        coordinator.highlightsDiff = highlightsDiff
+        if highlightsDiff {
+            textView.textStorage?.setAttributedString(Self.attributed(text))
+        } else {
+            textView.string = text
+            textView.font = GitTreesUI.monospacedNSFont
+            textView.textColor = .labelColor
+        }
         textView.scroll(NSPoint(x: 0, y: 0))
     }
 
@@ -261,6 +278,7 @@ struct DiffTextView: NSViewRepresentable {
 
     final class Coordinator {
         weak var textView: NSTextView?
-        var lastDiff: String?
+        var lastText: String?
+        var highlightsDiff = false
     }
 }

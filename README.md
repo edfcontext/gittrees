@@ -213,8 +213,8 @@ still take precedence. Git LFS must be installed separately; there is no dedicat
   even when other files applied successfully. Dismissing the notice keeps the stash.
 - **Commit identity** — shows who a commit would be authored as and where that came
   from, and can pin an identity on the repository. See below.
-- **Pull requests** — open a pull request for the selected worktree's branch through the
-  GitHub CLI (`gh pr create`), and see the one already open for it. See below.
+- **Pull requests** — create a pull request for the selected worktree's branch, look up
+  a PR by number or URL, and approve or merge through the GitHub CLI. See below.
 - **Workspace** — open a worktree in Finder, Terminal, IntelliJ IDEA, VS Code or Cursor
   via `NSWorkspace`; the preferred IDE is stored in Settings.
 
@@ -369,12 +369,10 @@ the app. Point Settings → GitHub at the `gh` binary (the common Homebrew and M
 locations are probed by default); the section shows, live, whether gh is installed and
 which account it is signed in as.
 
-**Create Pull Request…** (Repository menu, or the toolbar button that appears when the
-repository has a GitHub remote) opens a sheet for the selected worktree's branch. The
-head is fixed — it is the branch that worktree has checked out — and the sheet runs in
-the worktree's directory, so gh sees the right branch as HEAD. You choose the base, edit
-a title (prefilled from the last commit) and body, and optionally mark it a draft; it
-then runs:
+**Pull Requests…** in the Repository menu or **Pull Request…** in the worktree toolbar
+opens the pull request sheet. When creating a PR, the selected worktree's checked-out
+branch is the head. You choose the base, edit a title (prefilled from the last commit)
+and body, and optionally mark it as a draft. The command runs in that worktree.
 
 ```
 gh pr create --title <t> --body <b> --base <base> --head <branch> [--draft]
@@ -383,15 +381,30 @@ gh pr create --title <t> --body <b> --base <base> --head <branch> [--draft]
 Preconditions are shown up front rather than surfaced as a failure after you have
 written a description: gh must be installed and signed in, the repository needs a GitHub
 remote, and the branch must have been pushed. When a pull request is already open for the
-branch, the sheet shows it instead, with **Open in Browser** (`gh pr view --web`).
+branch, the sheet shows it. Pick any open PR in the repository from the sidebar, or
+enter a PR number or paste a GitHub PR URL and choose **View PR**. **Open in Browser**
+opens the displayed PR on GitHub.
+
+The selected PR shows its changed files and a per-file diff. Select a file to review
+additions and deletions, or use **View Files on GitHub** when GitHub supplies only a
+partial patch or the file is binary.
+
+The **Checks** tab lists CI results with failures first. Select a failed GitHub Actions
+job to see its failed steps and published failure annotations, then choose **Failed-step
+Log** or **Full Log** to read the output in GitTrees. Checks from other CI providers
+link to the provider’s details when available.
+
+For an open PR that's ready for review, **Approve** submits a GitHub approval using
+the signed-in account. GitHub requires a different account from the PR author.
+**Merge…** offers a merge commit, squash, or rebase. After you confirm, GitHub applies
+the repository's merge rules, including required checks and merge queues.
 
 Signing in (`gh auth login`) and enterprise-host configuration stay in the terminal,
 where gh's own interactive flow belongs; GitTrees never runs interactive gh commands.
 
 ## Not in this version
 
-GitLab integration, issue tracking, PR review and merge (only *creating* a pull request
-is supported, via the GitHub CLI), interactive rebase, merge editor,
+GitLab integration, issue tracking, interactive rebase, merge editor,
 hunk or line staging, submodules, LFS, SSH keys, credential UI, cloning, signing
 configuration, bisect, reflog, blame, and tag deletion/pushing.
 Stashes support creating, listing, applying and deleting; there is no separate Pop action. The

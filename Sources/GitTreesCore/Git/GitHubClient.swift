@@ -6,8 +6,17 @@ import Foundation
 /// arguments. Each method takes a worktree or repository URL, which becomes the process
 /// working directory — so gh acts on the branch that worktree has checked out.
 public final class GitHubClient: Sendable {
+    private struct ActionsJobDetails: Decodable {
+        struct Step: Decodable {
+            let name: String
+            let number: Int
+            let conclusion: String?
+        }
+        let steps: [Step]?
+    }
+
     /// The JSON fields requested from `gh pr view`; must match `PullRequest`'s keys.
-    static let pullRequestFields = "number,url,title,state,isDraft,baseRefName,headRefName"
+    static let pullRequestFields = "number,url,title,state,isDraft,baseRefName,headRefName,headRefOid,author,baseRefOid,changedFiles"
 
     private let runner: any GitHubRunning
 
@@ -115,6 +124,20 @@ public final class GitHubClient: Sendable {
 
     // MARK: - Pull requests
 
+    public func openPullRequests(directory: URL, limit: Int) async throws -> [PullRequest] {
+        let result = try await runner.run(
+            GitHubCommand(
+                ["pr", "list", "--state", "open", "--limit", String(limit), "--json", Self.pullRequestFields],
+                workingDirectory: directory
+            )
+        )
+        do {
+            return try JSONDecoder().decode([PullRequest].self, from: result.stdout)
+        } catch {
+            throw GitHubError.unexpectedOutput(reason: "could not decode the open pull request list")
+        }
+    }
+
     /// The pull request already open for the worktree's branch, or nil when there is
     /// none (or gh cannot resolve a GitHub repository here).
     public func pullRequest(worktree: URL) async throws -> PullRequest? {
@@ -155,11 +178,171 @@ public final class GitHubClient: Sendable {
         return created
     }
 
-    /// Opens a pull request (or its create page) in the browser via `gh pr view --web`.
-    public func openPullRequestInBrowser(worktree: URL) async throws {
-        _ = try await runner.run(
-            GitHubCommand(["pr", "view", "--web"], workingDirectory: worktree)
+    /// Looks up a specific PR by number or URL, including closed and merged PRs.
+    public func pullRequest(_ reference: String, directory: URL) async throws -> PullRequest {
+        let result = try await runner.run(
+            GitHubCommand(
+                ["pr", "view", "--json", Self.pullRequestFields, "--", reference],
+                workingDirectory: directory
+            )
         )
+        return try Self.decodePullRequest(result.stdout)
+    }
+
+    public func openPullRequestInBrowser(worktree: URL, reference: String? = nil) async throws {
+        var arguments = ["pr", "view", "--web"]
+        if let reference { arguments += ["--", reference] }
+        _ = try await runner.run(GitHubCommand(arguments, workingDirectory: worktree))
+    }
+
+    public func pullRequestChecks(_ request: PullRequest, directory: URL) async throws -> [PullRequestCheck] {
+        let arguments = ["pr", "checks", "--json", "name,workflow,state,bucket,event,description,link", "--", request.url]
+        let result = try await runner.run(GitHubCommand(arguments, workingDirectory: directory, acceptableExitCodes: [0, 1, 8]))
+        if let checks = try? JSONDecoder().decode([PullRequestCheck].self, from: result.stdout) {
+            return checks
+        }
+        if result.exitCode == 1 && result.stderrText.hasPrefix("no checks reported") { return [] }
+        if result.exitCode != 0 {
+            throw GitHubError.commandFailed(GitFailure(
+                program: "gh", arguments: arguments, workingDirectory: directory.path, exitCode: result.exitCode,
+                stdout: result.stdoutText, stderr: result.stderrText
+            ))
+        }
+        throw GitHubError.unexpectedOutput(reason: "could not decode the PR checks")
+    }
+
+    public func pullRequestCheckDetails(
+        _ check: PullRequestCheck, request: PullRequest, directory: URL
+    ) async throws -> PullRequestCheckDetails {
+        guard let job = check.actionsJob(for: request) else {
+            throw GitHubError.unexpectedOutput(reason: "this check does not identify a GitHub Actions job")
+        }
+        async let annotations = check.hasFailed ? checkFailureAnnotations(job, directory: directory) : []
+        let steps = try await failedSteps(job, directory: directory)
+        return await PullRequestCheckDetails(failedSteps: steps.map(\.name), annotations: annotations)
+    }
+
+    private func failedSteps(_ job: GitHubActionsJob, directory: URL) async throws -> [ActionsJobDetails.Step] {
+        let result = try await runner.run(GitHubCommand(
+            ["api", "--hostname", job.repository.host, job.apiPath],
+            workingDirectory: directory
+        ))
+        guard let details = try? JSONDecoder().decode(ActionsJobDetails.self, from: result.stdout) else {
+            throw GitHubError.unexpectedOutput(reason: "could not decode the Actions job")
+        }
+        return (details.steps ?? []).filter { $0.conclusion == "failure" }
+    }
+
+    private func checkFailureAnnotations(_ job: GitHubActionsJob, directory: URL) async -> [PullRequestCheckAnnotation] {
+        let path = "repos/\(job.repository.name)/check-runs/\(job.id)/annotations?per_page=100"
+        guard let result = try? await runner.run(GitHubCommand(
+            ["api", "--hostname", job.repository.host, "--paginate", "--slurp", path],
+            workingDirectory: directory
+        )), let pages = try? JSONDecoder().decode([[PullRequestCheckAnnotation]].self, from: result.stdout)
+        else { return [] }
+        return pages.joined().filter { $0.level == "failure" }
+    }
+
+    public func pullRequestCheckLog(
+        _ check: PullRequestCheck, request: PullRequest, failedOnly: Bool, directory: URL
+    ) async throws -> String {
+        guard let job = check.actionsJob(for: request) else {
+            throw GitHubError.unexpectedOutput(reason: "this check does not identify a GitHub Actions job")
+        }
+        if !failedOnly {
+            return try await actionsLog(host: job.repository.host, path: "\(job.apiPath)/logs", directory: directory)
+        }
+
+        let steps = try await failedSteps(job, directory: directory)
+        var logs: [String] = []
+        for step in steps {
+            let log = try await actionsLog(
+                host: job.repository.host, path: "\(job.apiPath)/steps/\(step.number)/logs", directory: directory
+            )
+            if !log.isEmpty { logs.append("\(step.name)\n\(log)") }
+        }
+        return logs.joined(separator: "\n")
+    }
+
+    private func actionsLog(host: String, path: String, directory: URL) async throws -> String {
+        // The API streams raw logs, which may contain terminal controls. Keep them
+        // out of the text viewer while preserving the original log lines.
+        let result = try await runner.run(GitHubCommand(
+            ["api", "--hostname", host, "--allow-escape-sequences",
+             "-H", "X-GitHub-Api-Version: 2026-03-10", path],
+            workingDirectory: directory
+        ))
+        let unstyled = result.stdoutText.replacingOccurrences(
+            of: "\u{001B}(?:\\[[0-?]*[ -/]*[@-~]|\\][^\u{0007}\u{001B}]*(?:\u{0007}|\u{001B}\\\\))",
+            with: "", options: .regularExpression
+        )
+        return String(unstyled.unicodeScalars.filter { scalar in
+            scalar == "\n" || scalar == "\r" || scalar == "\t" || !CharacterSet.controlCharacters.contains(scalar)
+        })
+    }
+
+    public func pullRequestChanges(_ request: PullRequest, directory: URL) async throws -> PullRequestChanges {
+        // The files endpoint follows the live PR. Confirm its revision after reading
+        // every page, and retry once if a push or retarget happened while loading.
+        var expected = request
+        for _ in 0..<2 {
+            let target = try Self.pullRequestAPITarget(expected)
+            let result = try await runner.run(GitHubCommand(
+                ["api", "--hostname", target.host, "--paginate", "--slurp", "\(target.path)/files?per_page=100"],
+                workingDirectory: directory
+            ))
+            let current = try await pullRequest(expected.url, directory: directory)
+            if current.hasSameRevision(as: expected) {
+                do {
+                    let pages = try JSONDecoder().decode([[PullRequestFile]].self, from: result.stdout)
+                    return PullRequestChanges(request: current, files: pages.flatMap { $0 })
+                } catch {
+                    throw GitHubError.unexpectedOutput(reason: "could not decode the changed files")
+                }
+            }
+            expected = current
+        }
+        throw GitHubError.pullRequestChanged
+    }
+
+    public func perform(
+        _ action: PullRequestAction, on pr: PullRequest, directory: URL
+    ) async throws -> GitResult {
+        guard pr.isOpen, !pr.isDraft else {
+            throw GitHubError.unexpectedOutput(reason: "the pull request must be open and ready for review")
+        }
+
+        let arguments: [String]
+        switch action {
+        case .approve:
+            if let head = pr.headRefOid, !head.isEmpty {
+                let target = try Self.pullRequestAPITarget(pr)
+                let current = try await pullRequest(pr.url, directory: directory)
+                guard current.hasSameRevision(as: pr), current.isOpen, !current.isDraft else {
+                    throw GitHubError.pullRequestChanged
+                }
+                arguments = [
+                    "api", "--hostname", target.host, "--method", "POST", "\(target.path)/reviews",
+                    "--raw-field", "event=APPROVE", "--raw-field", "commit_id=\(head)"
+                ]
+            } else {
+                arguments = ["pr", "review", "--approve", "--", pr.url]
+            }
+        case .merge(let method):
+            guard let head = pr.headRefOid, !head.isEmpty else {
+                throw GitHubError.unexpectedOutput(reason: "reload the pull request to verify its head commit")
+            }
+            arguments = ["pr", "merge", "--\(method.rawValue)", "--match-head-commit", head, "--", pr.url]
+        }
+        return try await runner.run(GitHubCommand(arguments, workingDirectory: directory))
+    }
+
+    private static func pullRequestAPITarget(_ pr: PullRequest) throws -> (host: String, path: String) {
+        guard let repository = GitHubRepositoryURL(pr.url), repository.path.count == 2,
+              repository.path[0] == "pull", Int(repository.path[1]) == pr.number, pr.number > 0 else {
+            throw GitHubError.unexpectedOutput(reason: "invalid pull request URL")
+        }
+        return (repository.host, "repos/\(repository.name)/pulls/\(pr.number)")
     }
 
     private static func decodePullRequest(_ data: Data) throws -> PullRequest {

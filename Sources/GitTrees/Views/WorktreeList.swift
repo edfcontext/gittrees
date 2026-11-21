@@ -134,6 +134,9 @@ struct WorktreeContextMenu: View {
     let onRequestLock: (Worktree) -> Void
 
     var body: some View {
+        Button("New Worktree…") { commands.newWorktree() }
+        Divider()
+
         ForEach(launcher.installedEditors()) { editor in
             Button("Open in \(editor.displayName)") { open(in: editor) }
         }

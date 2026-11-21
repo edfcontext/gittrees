@@ -37,7 +37,7 @@ struct RepositorySidebar: View {
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 22)
 
-            footer
+            pruneFooter
         }
         .sheet(item: $branchToDelete) { branch in
             DeleteBranchSheet(branch: branch) {
@@ -88,6 +88,8 @@ struct RepositorySidebar: View {
             Button("New Repository…", action: onNewWorkspace)
             Button("Open Repository…", action: onOpenRepository)
             if let repository = service.repository {
+                Button("New Worktree…", action: onNewWorktree)
+                Divider()
                 Button("Reveal in Finder") {
                     launcher.reveal(repository.mainWorktreePath)
                 }
@@ -99,33 +101,23 @@ struct RepositorySidebar: View {
 
     // MARK: - Footer
 
-    private var footer: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 6) {
-                Button(action: onNewWorktree) {
-                    Label("New Worktree", systemImage: "plus")
+    @ViewBuilder
+    private var pruneFooter: some View {
+        if service.worktrees.contains(where: { $0.isPrunable || $0.isMissingOnDisk }) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    Task { await service.pruneWorktrees() }
+                } label: {
+                    Label("Prune", systemImage: "wand.and.rays")
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
-                .disabled(service.repository == nil)
-                .help("Create a worktree (⌘N)")
-
-                Spacer(minLength: 0)
-
-                if service.worktrees.contains(where: { $0.isPrunable || $0.isMissingOnDisk }) {
-                    Button {
-                        Task { await service.pruneWorktrees() }
-                    } label: {
-                        Label("Prune", systemImage: "wand.and.rays")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove stale worktree metadata")
-                }
+                .help("Remove stale worktree metadata")
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
         }
     }
 

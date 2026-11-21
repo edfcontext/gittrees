@@ -70,6 +70,14 @@ public struct PullRequestDraft: Sendable, Equatable {
 ///
 /// The field names match gh's JSON exactly so the same type decodes its output directly.
 public struct PullRequest: Identifiable, Hashable, Sendable, Codable {
+    public struct Author: Hashable, Sendable, Codable {
+        public var login: String
+
+        public init(login: String) {
+            self.login = login
+        }
+    }
+
     public var number: Int
     public var url: String
     public var title: String
@@ -78,6 +86,10 @@ public struct PullRequest: Identifiable, Hashable, Sendable, Codable {
     public var isDraft: Bool
     public var baseRefName: String
     public var headRefName: String
+    public var headRefOid: String?
+    public var baseRefOid: String?
+    public var changedFiles: Int?
+    public var author: Author?
 
     public init(
         number: Int,
@@ -86,7 +98,11 @@ public struct PullRequest: Identifiable, Hashable, Sendable, Codable {
         state: String,
         isDraft: Bool,
         baseRefName: String,
-        headRefName: String
+        headRefName: String,
+        headRefOid: String? = nil,
+        author: Author? = nil,
+        baseRefOid: String? = nil,
+        changedFiles: Int? = nil
     ) {
         self.number = number
         self.url = url
@@ -95,11 +111,26 @@ public struct PullRequest: Identifiable, Hashable, Sendable, Codable {
         self.isDraft = isDraft
         self.baseRefName = baseRefName
         self.headRefName = headRefName
+        self.headRefOid = headRefOid
+        self.author = author
+        self.baseRefOid = baseRefOid
+        self.changedFiles = changedFiles
     }
 
     public var id: Int { number }
 
     public var isOpen: Bool { state.uppercased() == "OPEN" }
+    public var isMerged: Bool { state.uppercased() == "MERGED" }
+
+    public func hasSameRevision(as other: PullRequest) -> Bool {
+        url == other.url && headRefOid == other.headRefOid
+            && baseRefName == other.baseRefName && baseRefOid == other.baseRefOid
+    }
+
+    public func isAuthored(by account: String?) -> Bool {
+        guard let account, let author else { return false }
+        return author.login.caseInsensitiveCompare(account) == .orderedSame
+    }
 
     /// `#42 · main ← feature/x`, for compact display.
     public var shortDescription: String {
@@ -116,6 +147,56 @@ public struct PullRequest: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+public struct PullRequestChanges: Sendable {
+    public let request: PullRequest
+    public let files: [PullRequestFile]
+}
+
+public struct PullRequestFile: Decodable, Identifiable, Sendable {
+    public let filename: String
+    public let previousFilename: String?
+    public let status: String
+    public let additions: Int
+    public let deletions: Int
+    public let patch: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case filename, status, additions, deletions, patch
+        case previousFilename = "previous_filename"
+    }
+
+    public var id: String { filename }
+
+    /// GitHub may omit trailing hunks from large patches.
+    public var hasPartialPatch: Bool {
+        guard let patch, !patch.isEmpty else { return false }
+        var added = 0
+        var removed = 0
+        for line in patch.utf8.split(separator: 0x0A) {
+            if line.first == 0x2B { added += 1 }
+            if line.first == 0x2D { removed += 1 }
+        }
+        return added < additions || removed < deletions
+    }
+}
+
+public enum PullRequestMergeMethod: String, CaseIterable, Sendable {
+    case merge, squash, rebase
+
+    public var label: String {
+        switch self {
+        case .merge: "Create a Merge Commit"
+        case .squash: "Squash and Merge"
+        case .rebase: "Rebase and Merge"
+        }
+    }
+}
+
+public enum PullRequestAction: Sendable {
+    case approve
+    case merge(PullRequestMergeMethod)
+}
+
 /// Errors from driving the GitHub CLI.
 public enum GitHubError: Error, LocalizedError, Sendable {
     case executableNotFound(path: String)
@@ -129,6 +210,7 @@ public enum GitHubError: Error, LocalizedError, Sendable {
     case branchNotPushed(branch: String)
     /// gh's JSON did not match the expected shape.
     case unexpectedOutput(reason: String)
+    case pullRequestChanged
 
     public var errorDescription: String? {
         switch self {
@@ -146,6 +228,8 @@ public enum GitHubError: Error, LocalizedError, Sendable {
             return "The branch \(branch) has not been pushed yet."
         case .unexpectedOutput(let reason):
             return "Unexpected output from gh: \(reason)"
+        case .pullRequestChanged:
+            return "The pull request changed. Refresh its changed files and review the latest diff."
         }
     }
 
