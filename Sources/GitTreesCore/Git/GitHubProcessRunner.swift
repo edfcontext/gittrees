@@ -53,7 +53,7 @@ public final class GitHubProcessRunner: GitHubRunning {
                 executable: executableURL,
                 arguments: command.arguments,
                 workingDirectory: command.workingDirectory,
-                environment: environment(overrides: command.environmentOverrides)
+                environment: await environment(overrides: command.environmentOverrides)
             )
         } catch let failure as ProcessLaunchFailure {
             throw GitHubError.launchFailed(arguments: command.arguments, reason: failure.reason)
@@ -81,9 +81,9 @@ public final class GitHubProcessRunner: GitHubRunning {
     /// The user's environment plus the settings that keep gh non-interactive: no
     /// prompts (which would hang with no terminal attached), no colour codes in output
     /// the app parses, and no update-check noise on stderr.
-    private func environment(overrides: [String: String]) -> [String: String] {
-        var environment = ToolEnvironment.addingSearchPaths(
-            to: ProcessInfo.processInfo.environment, executable: executableURL
+    private func environment(overrides: [String: String]) async -> [String: String] {
+        var environment = await ToolEnvironment.forProcess(
+            executable: executableURL, pathOverride: overrides["PATH"]
         )
         environment["GH_PROMPT_DISABLED"] = "1"
         environment["GH_NO_UPDATE_NOTIFIER"] = "1"

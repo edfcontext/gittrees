@@ -17,6 +17,7 @@ struct PresentableErrorTests {
 
     @Test("known diagnostics produce specific guidance", arguments: [
         ("git-lfs filter-process: git-lfs: command not found\nfatal: the remote end hung up unexpectedly", "Git LFS", "brew install git-lfs"),
+        ("pre-push: git-lfs is required but was not found on PATH.", "Git LFS", "brew install git-lfs"),
         ("Permission denied (publickey).", "authenticate", "SSH"),
         ("Host key verification failed.", "server's identity", "fingerprint"),
         ("fatal: Could not resolve host: example.com", "connect", "VPN"),
@@ -43,6 +44,47 @@ struct PresentableErrorTests {
         #expect(error.recoveryText.contains(sample.2))
         #expect(error.diagnosticText.contains(sample.0))
         #expect(!error.recoverySteps.isEmpty)
+    }
+
+    @Test("a push that cannot start Node explains the cause and preserves Git's output")
+    func missingNodeDuringPush() {
+        let stderr = """
+            env: node: No such file or directory
+            error: failed to push some refs to 'github-ctx:edfcontext/TheArcherJS.git'
+            """
+        let error = present(stderr, arguments: GitCommand.globalFlags + ["push"])
+        #expect(error.summary.contains("Node.js"))
+        #expect(error.recoveryText.contains("node --version"))
+        #expect(error.recoveryText.contains("nvm"))
+        #expect(error.reportText.contains("stderr:\n" + stderr))
+    }
+
+    @Test("shell and env errors identify the missing executable", arguments: [
+        ("env: ‘pnpm’: No such file or directory", "pnpm"),
+        ("/usr/bin/env: python3: No such file or directory", "python3"),
+        ("tools/git-hooks/pre-push: line 7: npm: command not found", "npm"),
+        ("/bin/sh: line 1: yarn: command not found", "yarn"),
+        ("sh: 1: ruby: not found", "ruby"),
+        ("zsh: command not found: pre-commit", "pre-commit")
+    ])
+    func missingLocalExecutable(_ sample: (String, String)) {
+        let error = present(sample.0, arguments: ["commit"])
+        #expect(error.summary.contains(sample.1))
+        #expect(error.recoveryText.contains("command -v " + sample.1))
+    }
+
+    @Test("remote output, patches and missing files do not identify a missing local executable", arguments: [
+        "remote: env: node: No such file or directory",
+        "+ env: node: No such file or directory",
+        "+ tools/git-hooks/pre-push: line 7: node: command not found",
+        "config.json: not found",
+        "fatal: config.json: No such file or directory",
+        "Error: Cannot find module 'node'"
+    ])
+    func ambiguousMissingFile(_ stderr: String) {
+        let error = present(stderr, arguments: ["push"])
+        #expect(error.summary.contains("could not complete"))
+        #expect(error.diagnosticText.contains(stderr))
     }
 
     @Test("GitHub CLI authentication guidance uses gh, rather than Git HTTPS credentials")

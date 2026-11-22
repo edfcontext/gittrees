@@ -114,9 +114,10 @@ Machine-readable output is used wherever Git offers it:
 Hooks and Git configuration are left alone: commits run without `--no-verify`, and the
 process inherits the user's environment. GitTrees appends the selected executable's
 directory and standard Homebrew, MacPorts and system tool directories to PATH, keeping
-existing entries first. This lets Git find installed LFS filters, credential helpers and
-hook tools when GitTrees is launched from Finder. Command-specific environment overrides
-still take precedence. Git LFS must be installed separately; there is no dedicated LFS UI.
+existing entries first. When those paths contain no Node.js, GitTrees also checks nvm
+for its default Node.js and npm. This lets Git find installed LFS filters, credential
+helpers and hook tools when GitTrees is launched from Finder. Command-specific
+environment overrides still take precedence. Git LFS must be installed separately.
 
 ## Features
 

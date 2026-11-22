@@ -14,7 +14,7 @@ struct ProcessLaunchFailure: Error {
 /// correct implementation of the tricky parts: draining both pipes concurrently (a large
 /// diff exceeds a pipe buffer, so reading only after exit would deadlock), and honouring
 /// task cancellation without signalling a process that never started or leaking one that
-/// did. Arguments are always passed as an array, so nothing is ever handed to a shell.
+/// did. Arguments are passed directly as an array to the requested executable.
 enum Subprocess {
     static func run(
         executable: URL,

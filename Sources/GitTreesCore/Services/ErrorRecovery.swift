@@ -15,10 +15,23 @@ enum ErrorRecovery {
             Guidance(summary: summary, steps: steps)
         }
 
-        if contains("git-lfs: command not found", "git-lfs: not found", "git: 'lfs' is not a git command") {
+        let missingProgram = missingExecutable(in: failure.message)
+        if missingProgram == "git-lfs"
+            || contains("git-lfs: command not found", "git-lfs: not found", "git: 'lfs' is not a git command",
+                        "git-lfs is required but was not found on path") {
             return guide("This repository needs Git LFS, but Git could not find it.",
                          "Install Git LFS if needed (with Homebrew: brew install git-lfs), then run git lfs install in Terminal.",
                          "Quit and reopen GitTrees, then try again. If Git LFS is already installed, check that its executable is in a standard tool directory such as /opt/homebrew/bin or /usr/local/bin.")
+        }
+        if missingProgram == "node" {
+            return guide("GitTrees could not find Node.js (node), which a local script needs for this operation.",
+                         "In Terminal, open this worktree and run node --version. If it fails, install or activate the Node.js version required by the repository.",
+                         "If you use nvm, check that its default points to an installed Node version, then quit and reopen GitTrees. If Node works only in Terminal, retry the Git command there.")
+        }
+        if let missingProgram {
+            return guide("GitTrees could not find the local program ‘\(missingProgram)’ needed for this operation.",
+                         "In Terminal, run command -v \(missingProgram). If it is missing, follow the repository’s setup instructions to install or enable it.",
+                         "If the program works only in Terminal, retry the Git command there or make the program available on the PATH used by GitTrees.")
         }
         if contains("host key verification failed", "remote host identification has changed") {
             return guide("SSH could not verify the remote server's identity.",
@@ -108,6 +121,26 @@ enum ErrorRecovery {
             return guide("Git could not access a required file or folder.",
                          "Check the path in Technical details, its ownership and write permissions, and whether the volume is read-only. If macOS blocked access, review GitTrees under System Settings → Privacy & Security → Files and Folders.",
                          "Retry when the folder is accessible. Ask its owner or administrator for access if necessary.")
+        }
+        return nil
+    }
+
+    private static func missingExecutable(in output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            // Match complete env or shell diagnostics so a remote error, patch or missing
+            // repository file cannot be mistaken for a missing local executable.
+            if let match = line.wholeMatch(of: #/(?:\/usr\/bin\/)?env: ['‘"“]?([a-zA-Z0-9_][a-zA-Z0-9_.+-]*)['’"”]?: (?:No such file or directory|command not found|not found)/#) {
+                return String(match.1)
+            }
+            if let match = line.wholeMatch(of: #/(?:(?:sh|bash|zsh|dash|ksh): (?:(?:line )?[0-9]+: )?|[.\/a-zA-Z0-9_][^:]*: (?:line )?[0-9]+: )([a-zA-Z0-9_][a-zA-Z0-9_.+-]*): (?:command not found|not found)/#) {
+                return String(match.1)
+            }
+            if let match = line.wholeMatch(of: #/([a-zA-Z0-9_][a-zA-Z0-9_.+-]*): command not found/#) {
+                return String(match.1)
+            }
+            if let match = line.wholeMatch(of: #/zsh: command not found: ([a-zA-Z0-9_][a-zA-Z0-9_.+-]*)/#) {
+                return String(match.1)
+            }
         }
         return nil
     }

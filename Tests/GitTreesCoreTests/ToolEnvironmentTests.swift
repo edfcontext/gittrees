@@ -5,9 +5,9 @@ import Testing
 @Suite("Tool environment")
 struct ToolEnvironmentTests {
     @Test("a desktop PATH gains package manager tools without changing existing precedence")
-    func desktopSearchPath() {
+    func desktopSearchPath() async {
         let inherited = ["PATH": "/custom/bin:/usr/bin:/bin", "HOME": "/Users/example"]
-        let environment = ToolEnvironment.addingSearchPaths(
+        let environment = await ToolEnvironment.addingSearchPaths(
             to: inherited, executable: URL(fileURLWithPath: "/custom/git/bin/git")
         )
         let paths = environment["PATH"]!.components(separatedBy: ":")
@@ -21,14 +21,43 @@ struct ToolEnvironmentTests {
     }
 
     @Test("a missing PATH is usable without adding the working directory")
-    func missingSearchPath() {
-        let environment = ToolEnvironment.addingSearchPaths(
+    func missingSearchPath() async {
+        let environment = await ToolEnvironment.addingSearchPaths(
             to: [:], executable: URL(fileURLWithPath: "/usr/bin/git")
         )
         let paths = environment["PATH"]!.components(separatedBy: ":")
         #expect(!paths.contains(""))
         #expect(paths.contains("/bin"))
         #expect(paths.contains("/opt/homebrew/bin"))
+    }
+
+    @Test("nvm lookup finds the default Node even when the desktop PATH has no nvm tools")
+    func nvmLookup() async throws {
+        let home = try GitExecutableTests.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let nvm = home.appendingPathComponent("custom nvm")
+        let bin = nvm.appendingPathComponent("versions/node/v24.19.0/bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let node = bin.appendingPathComponent("node")
+        try "#!/bin/sh\n".write(to: node, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        try """
+            nvm() {
+                [ "$1" = which ] && [ "$2" = default ] || return 1
+                printf '%s\\n' "$NVM_DIR/versions/node/v24.19.0/bin/node"
+            }
+            """.write(to: nvm.appendingPathComponent("nvm.sh"), atomically: true, encoding: .utf8)
+
+        let inherited = ["PATH": "/usr/bin:/bin", "HOME": home.path, "NVM_DIR": nvm.path]
+        #expect(await ToolEnvironment.resolveNVMBin(in: inherited) == bin.path)
+        let active = inherited.merging(["PATH": bin.path + ":/usr/bin:/bin"]) { _, new in new }
+        let environment = await ToolEnvironment.addingSearchPaths(
+            to: active, executable: URL(fileURLWithPath: "/usr/bin/git")
+        ) {
+            Issue.record("An inherited Node should take precedence over nvm's default")
+            return nil
+        }
+        #expect(environment["PATH"]?.components(separatedBy: ":").first == bin.path)
     }
 
     @Test("both runners make sibling helpers available and honour explicit PATH overrides")
