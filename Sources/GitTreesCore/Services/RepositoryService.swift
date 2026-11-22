@@ -2220,10 +2220,19 @@ public final class RepositoryService {
         }
     }
 
-    /// The patch a stash would apply, for the panel's diff pane.
     public func stashDiff(_ stash: Stash) async throws -> String {
         guard let repository else { return "" }
         return try await client.stashDiff(
+            repository: repository.commandDirectory,
+            commit: stash.commit,
+            contextLines: preferences.diffContextLines
+        )
+    }
+
+    /// A disk-backed preview of the patch a stash would apply.
+    public func stashDiffPreview(_ stash: Stash) async throws -> StashDiffPreview? {
+        guard let repository else { return nil }
+        return try await client.stashDiffPreview(
             repository: repository.commandDirectory,
             commit: stash.commit,
             contextLines: preferences.diffContextLines

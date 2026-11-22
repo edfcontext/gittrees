@@ -25,6 +25,7 @@ struct StashView: View {
                     stashList
                         .frame(minWidth: 240, idealWidth: 320, maxWidth: 460)
                     StashDiffPane()
+                        .id(service.selectedStashID)
                         .frame(minWidth: 360, maxWidth: .infinity)
                 }
             }
@@ -117,8 +118,11 @@ private struct StashRow: View {
 private struct StashDiffPane: View {
     @Environment(RepositoryService.self) private var service
 
-    @State private var diff = ""
-    @State private var isLoading = false
+    @State private var preview: StashDiffPreview?
+    @State private var page: StashDiffPreview.Page?
+    @State private var pageOffsets: [UInt64] = [0]
+    @State private var pageIndex = 0
+    @State private var isLoading = true
     @State private var loadError: String?
     @State private var confirmingDrop = false
 
@@ -133,10 +137,14 @@ private struct StashDiffPane: View {
             Divider()
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if pageIndex > 0 || page?.nextOffset != nil {
+                Divider()
+                pageControls
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(GitTreesUI.editorBackground)
-        .task(id: reloadKey) { await reload() }
+        .task(id: pageIndex) { await reload(pageIndex) }
         .confirmationDialog(
             selected.map { "Delete stash “\($0.message)”?" } ?? "",
             isPresented: $confirmingDrop,
@@ -159,9 +167,6 @@ private struct StashDiffPane: View {
                     .font(.caption.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if isLoading {
-                    ProgressView().controlSize(.small).scaleEffect(0.6)
-                }
                 Spacer(minLength: 0)
                 Button("Apply") { Task { await service.applyStash(stash) } }
                     .help("git stash apply — restore these changes into \(service.selectedWorktree?.displayName ?? "the worktree"), keeping the stash.")
@@ -193,34 +198,65 @@ private struct StashDiffPane: View {
                 systemImage: "exclamationmark.triangle",
                 description: Text(loadError)
             )
-        } else if diff.isEmpty && !isLoading {
-            ContentUnavailableView(
-                "Empty Diff",
-                systemImage: "doc",
-                description: Text("Git produced no diff for this stash.")
-            )
+        } else if isLoading {
+            ProgressView("Loading stash diff…")
+        } else if let page, !page.text.isEmpty {
+            DiffTextView(diff: page.text)
         } else {
-            DiffTextView(diff: diff)
+            ContentUnavailableView("Empty Diff", systemImage: "doc")
         }
     }
 
-    private var reloadKey: String { service.selectedStashID ?? "none" }
-
-    private func reload() async {
-        guard let stash = selected else {
-            diff = ""
-            loadError = nil
-            return
+    private var pageControls: some View {
+        HStack(spacing: 10) {
+            Text("Page \(pageIndex + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Previous") {
+                isLoading = true
+                pageIndex -= 1
+            }
+            .disabled(pageIndex == 0 || isLoading)
+            Button("Next") {
+                guard let offset = page?.nextOffset else { return }
+                if pageIndex + 1 == pageOffsets.count {
+                    pageOffsets.append(offset)
+                }
+                isLoading = true
+                pageIndex += 1
+            }
+            .disabled(page?.nextOffset == nil || isLoading)
         }
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(GitTreesUI.barBackground)
+    }
+
+    private func reload(_ index: Int) async {
+        guard let stash = selected else { return }
         isLoading = true
         loadError = nil
-        defer { isLoading = false }
+        defer {
+            if !Task.isCancelled { isLoading = false }
+        }
         do {
-            diff = try await service.stashDiff(stash)
+            let prepared: StashDiffPreview?
+            if let preview {
+                prepared = preview
+            } else {
+                prepared = try await service.stashDiffPreview(stash)
+            }
+            let loaded = try await prepared?.page(startingAt: pageOffsets[index])
+            guard !Task.isCancelled else { return }
+            preview = prepared
+            page = loaded
         } catch is CancellationError {
             return
         } catch {
-            diff = ""
+            guard !Task.isCancelled else { return }
+            page = nil
             loadError = PresentableError(title: "", error: error).message
         }
     }

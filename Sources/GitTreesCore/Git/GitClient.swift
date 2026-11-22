@@ -668,6 +668,18 @@ public final class GitClient: Sendable {
         return result.stdoutText
     }
 
+    public func stashDiffPreview(repository: URL, commit: String, contextLines: Int = 3) async throws -> StashDiffPreview {
+        let preview = try StashDiffPreview()
+        // Git writes the patch directly so neither the runner nor the viewer needs
+        // to allocate storage for the entire diff in memory.
+        _ = try await run(
+            ["stash", "show", "--include-untracked", "-p", "-U\(contextLines)",
+             "--output=\(preview.patchURL.path)", commit],
+            in: repository
+        )
+        return preview
+    }
+
     /// `git stash push`, returning the new stash commit.
     ///
     /// Returns nil when there was nothing to stash: Git reports "No local changes to

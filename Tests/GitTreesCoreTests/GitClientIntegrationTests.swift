@@ -953,6 +953,35 @@ struct GitClientIntegrationTests {
         #expect(diff.contains("notes/new.txt"))
     }
 
+    @Test("a large stash preview pages through the complete patch, including long UTF-8 lines")
+    func pagesLargeStashDiff() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.cleanUp() }
+        let client = fixture.client
+
+        try fixture.write("hello\n" + String(repeating: "edited\n", count: 4_000), to: "README.md")
+        try fixture.write(String(repeating: "é🙂", count: 25_000) + "\n", to: "notes/new.txt")
+        let commit = try #require(
+            try await client.stashPush(worktree: fixture.repository, message: "large patch")
+        )
+
+        let original = try await client.stashDiff(repository: fixture.repository, commit: commit)
+        let preview = try await client.stashDiffPreview(repository: fixture.repository, commit: commit)
+        var offset: UInt64? = 0
+        var pages: [String] = []
+        while let start = offset {
+            let page = try await preview.page(startingAt: start)
+            #expect(!page.text.isEmpty)
+            #expect(page.text.utf8.count <= 64 * 1_024)
+            #expect(page.text.utf8.filter { $0 == 0x0A }.count <= 1_500)
+            if let next = page.nextOffset { try #require(next > start) }
+            pages.append(page.text)
+            offset = page.nextOffset
+        }
+        #expect(pages.count > 3)
+        #expect(pages.joined() == original)
+    }
+
     @Test("stash push can leave untracked files in place")
     func stashWithoutUntracked() async throws {
         let fixture = try await Fixture()
